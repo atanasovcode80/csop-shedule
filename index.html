@@ -1,486 +1,436 @@
-<!DOCTYPE html>
-<html lang="bg">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ЦСОП "Леда Милева" - Система за Разписание</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Библиотеки за експорт -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <!-- Firebase SDK v11 (Latest) -->
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
-        body { font-family: 'Manrope', sans-serif; background: #f8fafc; }
-        .schedule-grid {
-            display: grid;
-            grid-template-columns: 60px repeat(5, 1fr);
-            gap: 1px;
-            background-color: #e2e8f0;
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid #e2e8f0;
+import React, { useState, useEffect } from 'react';
+import { initializeApp, getApps } from 'firebase/app';
+import { getFirestore, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+
+// ТВОЯТА АКТУАЛИЗИРАНА КОНФИГУРАЦИЯ
+const firebaseConfig = {
+  apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
+  authDomain: "generator-razpisanie.firebaseapp.com",
+  databaseURL: "https://generator-razpisanie-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "generator-razpisanie",
+  storageBucket: "generator-razpisanie.firebasestorage.app",
+  messagingSenderId: "756529315524",
+  appId: "1:756529315524:web:faa5e91bdd62c2e05ed391",
+  measurementId: "G-ZRRXFYTKM1"
+};
+
+// Използваме фиксиран идентификатор за колекцията, за да избегнем грешки с броя сегменти
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'csop-leda-mileva';
+const DAYS = ["Понеделник", "Вторник", "Сряда", "Четвъртък", "Петък"];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+
+export default function App() {
+    const [user, setUser] = useState(null);
+    const [activeTab, setActiveTab] = useState('curriculum');
+    const [loading, setLoading] = useState(true);
+    const [isOnline, setIsOnline] = useState(false);
+    
+    const [selectedYear, setSelectedYear] = useState('2025/2026');
+    const [selectedTerm, setSelectedTerm] = useState(1);
+    const [selectedClass, setSelectedClass] = useState('I паралелка');
+
+    const [data, setData] = useState({
+        teachers: ["Калинка Илиева", "Галя Ненчева", "Петринка Нанова", "Цветанка Брайкова", "Огнян Йорданов", "Атанас Атанасов", "Цветанка Михайлова", "Петя Миланова", "Тони Иванов", "Валентин Кръстев", "Таня Петкова", "Габриела Мандалева", "Гергана Ненова"],
+        subjects: ["БЕЛ", "Математика", "ФВС", "Музика", "ИТ", "РКН", "ПСР", "ЕРГО", "Растениевъдство", "Логопед", "Психолог"],
+        classes: ["ПГ", "I паралелка", "II паралелка", "III паралелка", "IV паралелка", "V паралелка"],
+        constraints: [], 
+        curriculum: {}, 
+        schedule: {} 
+    });
+
+    useEffect(() => {
+        let firebaseApp;
+        try { 
+            firebaseApp = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0]; 
+        } catch (e) { 
+            console.error("Firebase Init Error:", e);
+            setLoading(false); 
+            return; 
         }
-        .grid-header { background: #f1f5f9; font-weight: 800; font-size: 0.65rem; padding: 12px; text-align: center; color: #475569; text-transform: uppercase; }
-        .grid-cell { background: white; min-height: 80px; padding: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
-        .grid-time { background: #f8fafc; font-weight: 800; color: #94a3b8; font-size: 0.8rem; }
-        .lesson-card { width: 100%; height: 100%; border-radius: 6px; display: flex; flex-direction: column; justify-content: center; align-items: center; border-left: 3px solid #6366f1; background: #f5f3ff; transition: transform 0.1s; }
-        .lesson-card:hover { transform: scale(1.02); }
-        @media print { .no-print { display: none; } }
-    </style>
-</head>
-<body>
-    <div id="root"></div>
+        
+        const auth = getAuth(firebaseApp);
+        const db = getFirestore(firebaseApp);
 
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const initAuth = async () => {
+            try { 
+                await signInAnonymously(auth); 
+                setIsOnline(true); 
+            } catch (err) { 
+                console.error("Auth Error:", err);
+                setIsOnline(false); 
+            }
+        };
+        initAuth();
 
-        // Firebase Initialization with Canvas Global Configs
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
-        const db = firebase.firestore();
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const apiKey = ""; // Will be provided by environment for Gemini calls
+        const unsubAuth = onAuthStateChanged(auth, (currUser) => {
+            setUser(currUser);
+            if (currUser) {
+                // ФИКС: Пътят трябва да е четен брой сегменти. 
+                // Структура: artifacts (col) -> appId (doc) -> public (col) -> data (doc)
+                const docRef = doc(db, 'artifacts', rawAppId, 'public', 'data');
+                
+                const unsubscribe = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setData(prev => ({ ...prev, ...docSnap.data() }));
+                    }
+                    setLoading(false);
+                }, (err) => {
+                    console.error("Firestore Snapshot Error:", err);
+                    setLoading(false);
+                });
+                return () => unsubscribe();
+            } else { 
+                const timer = setTimeout(() => setLoading(false), 2000); 
+                return () => clearTimeout(timer);
+            }
+        });
+        return () => unsubAuth();
+    }, []);
 
-        const DAYS = ["Понеделник", "Вторник", "Сряда", "Четвъртък", "Петък"];
-        const PERIODS = [1, 2, 3, 4, 5, 6, 7];
-        const ACADEMIC_YEAR = "2024 / 2025";
+    const updateCloud = async (newData) => {
+        setData(newData);
+        if (!isOnline || !user) return;
+        try { 
+            const db = getFirestore();
+            // ФИКС: Използваме същия четен път за запис
+            await setDoc(doc(db, 'artifacts', rawAppId, 'public', 'data'), newData); 
+        } catch (e) { 
+            console.error("Cloud Update Error:", e); 
+        }
+    };
 
-        function App() {
-            const [user, setUser] = useState(null);
-            const [data, setData] = useState({
-                teachers: [], subjects: [], classes: [],
-                curriculum: { 1: {}, 2: {} }, 
-                constraints: [],
-                schedule: { 1: {}, 2: {} },
-                aiInstructions: ""
+    const getTermData = (year, term) => data.curriculum[year]?.[term] || {};
+    
+    const addCurriculumEntry = (teacher, subject, hours) => {
+        const newData = { ...data };
+        if (!newData.curriculum[selectedYear]) newData.curriculum[selectedYear] = {};
+        if (!newData.curriculum[selectedYear][selectedTerm]) newData.curriculum[selectedYear][selectedTerm] = {};
+        if (!newData.curriculum[selectedYear][selectedTerm][selectedClass]) newData.curriculum[selectedYear][selectedTerm][selectedClass] = [];
+        
+        newData.curriculum[selectedYear][selectedTerm][selectedClass].push({ 
+            id: Math.random().toString(36).substr(2, 9),
+            teacher, 
+            subject, 
+            hours: parseInt(hours) 
+        });
+        updateCloud(newData);
+    };
+
+    const removeCurriculumEntry = (id) => {
+        const newData = { ...data };
+        newData.curriculum[selectedYear][selectedTerm][selectedClass] = 
+            (newData.curriculum[selectedYear]?.[selectedTerm]?.[selectedClass] || []).filter(e => e.id !== id);
+        updateCloud(newData);
+    };
+
+    const copyToSecondTerm = () => {
+        const newData = { ...data };
+        if (!newData.curriculum[selectedYear]) return;
+        newData.curriculum[selectedYear][2] = JSON.parse(JSON.stringify(newData.curriculum[selectedYear][1] || {}));
+        updateCloud(newData);
+        setSelectedTerm(2);
+    };
+
+    const generateSchedule = () => {
+        const newSchedule = {};
+        const termData = getTermData(selectedYear, selectedTerm);
+        const tasks = [];
+
+        Object.entries(termData).forEach(([cls, entries]) => {
+            newSchedule[cls] = {};
+            entries.forEach(entry => {
+                for (let i = 0; i < entry.hours; i++) {
+                    tasks.push({ classId: cls, teacher: entry.teacher, subject: entry.subject });
+                }
             });
-            const [loading, setLoading] = useState(true);
-            const [activeTab, setActiveTab] = useState('schedule');
-            const [selectedClass, setSelectedClass] = useState("");
-            const [selectedTerm, setSelectedTerm] = useState(1);
-            const [aiStatus, setAiStatus] = useState("");
-            const scheduleRef = useRef(null);
+        });
 
-            // Step 1: Authentication
-            useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await auth.signInWithCustomToken(__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
+        tasks.sort(() => Math.random() - 0.5);
+
+        DAYS.forEach(day => {
+            PERIODS.forEach(period => {
+                const globalBusyTeachersThisPeriod = new Set();
+
+                data.classes.forEach(cls => {
+                    const findValidTask = () => {
+                        for (let i = 0; i < tasks.length; i++) {
+                            const t = tasks[i];
+                            if (t.classId !== cls) continue;
+                            if (globalBusyTeachersThisPeriod.has(t.teacher)) continue;
+
+                            const hasConstraint = data.constraints.some(c => 
+                                c.teacher === t.teacher && 
+                                c.day === day && 
+                                parseInt(c.period) === period
+                            );
+                            if (hasConstraint) continue;
+
+                            globalBusyTeachersThisPeriod.add(t.teacher);
+                            return tasks.splice(i, 1)[0];
                         }
-                    } catch (error) {
-                        console.error("Auth error:", error);
+                        return null;
+                    };
+
+                    const assigned = findValidTask();
+                    if (assigned) {
+                        if (!newSchedule[cls]) newSchedule[cls] = {};
+                        newSchedule[cls][`${day}-${period}`] = assigned;
                     }
-                };
-
-                initAuth();
-                const unsubscribe = auth.onAuthStateChanged(u => {
-                    setUser(u);
-                    if (!u) setLoading(false);
                 });
-                return () => unsubscribe();
-            }, []);
+            });
+        });
 
-            // Step 2: Data Loading (Guarded by User)
-            useEffect(() => {
-                if (!user) return;
+        const updatedSched = { ...data.schedule };
+        if (!updatedSched[selectedYear]) updatedSched[selectedYear] = {};
+        updatedSched[selectedYear][selectedTerm] = newSchedule;
+        updateCloud({ ...data, schedule: updatedSched });
+    };
 
-                // Important: Using the mandatory path structure
-                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data');
-                
-                const unsubscribe = docRef.onSnapshot(doc => {
-                    if (doc.exists) {
-                        const d = doc.data();
-                        setData(prev => ({ ...prev, ...d }));
-                        if (d.classes?.length && !selectedClass) setSelectedClass(d.classes[0]);
-                    }
-                    setLoading(false);
-                }, err => {
-                    console.error("Firestore error:", err);
-                    setLoading(false);
-                });
+    if (loading) return (
+        <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+            <div className="font-black text-slate-400 animate-pulse uppercase tracking-[0.3em] text-[10px]">Свързване с Вашия Облак...</div>
+        </div>
+    );
 
-                return () => unsubscribe();
-            }, [user]);
-
-            const updateDB = async (newData) => {
-                if (!user) return;
-                setData(newData);
-                try {
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').set(newData, { merge: true });
-                } catch (error) {
-                    console.error("Save error:", error);
-                }
-            };
-
-            const copyPlan = () => {
-                const newCurriculum = JSON.parse(JSON.stringify(data.curriculum));
-                newCurriculum[2] = JSON.parse(JSON.stringify(newCurriculum[1]));
-                updateDB({ ...data, curriculum: newCurriculum });
-            };
-
-            const generateSchedule = () => {
-                let newSched = JSON.parse(JSON.stringify(data.schedule || { 1: {}, 2: {} }));
-                newSched[selectedTerm] = {};
-                
-                const allClasses = data.classes || [];
-                const fullSchedule = {}; 
-
-                allClasses.forEach(cls => {
-                    fullSchedule[cls] = {};
-                    const pool = [...(data.curriculum?.[selectedTerm]?.[cls] || [])];
-                    pool.sort(() => Math.random() - 0.5);
-
-                    // Priority order: 1-5 first, then 6-7
-                    const distributionOrder = [1, 2, 3, 4, 5, 6, 7];
-                    
-                    DAYS.forEach(day => {
-                        distributionOrder.forEach(p => {
-                            if (pool.length === 0) return;
-
-                            const taskIdx = pool.findIndex(task => {
-                                // 1. Forbidden check
-                                const isForbidden = data.constraints?.some(c => 
-                                    c.teacher === task.teacher && c.day === day && parseInt(c.period) === p
-                                );
-                                if (isForbidden) return false;
-
-                                // 2. Conflict check
-                                const isBusyElsewhere = allClasses.some(otherCls => 
-                                    fullSchedule[otherCls]?.[`${day}-${p}`]?.teacher === task.teacher
-                                );
-                                if (isBusyElsewhere) return false;
-
-                                return true;
-                            });
-
-                            if (taskIdx !== -1) {
-                                fullSchedule[cls][`${day}-${p}`] = pool[taskIdx];
-                                pool.splice(taskIdx, 1);
-                            }
-                        });
-                    });
-                });
-
-                newSched[selectedTerm] = fullSchedule;
-                updateDB({ ...data, schedule: newSched });
-            };
-
-            const exportExcel = () => {
-                const currentSched = data.schedule[selectedTerm]?.[selectedClass] || {};
-                const rows = PERIODS.map(p => {
-                    const row = { "Час": p };
-                    DAYS.forEach(d => {
-                        const item = currentSched[`${d}-${p}`];
-                        row[d] = item ? `${item.subject} (${item.teacher})` : "-";
-                    });
-                    return row;
-                });
-                const ws = XLSX.utils.json_to_sheet(rows);
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, `Срок ${selectedTerm}`);
-                XLSX.writeFile(wb, `Razpisanie_${selectedClass}_Srok${selectedTerm}.xlsx`);
-            };
-
-            const exportPDF = () => {
-                const input = scheduleRef.current;
-                html2canvas(input, { scale: 2 }).then((canvas) => {
-                    const imgData = canvas.toDataURL('image/png');
-                    const { jsPDF } = window.jspdf;
-                    const pdf = new jsPDF('l', 'mm', 'a4');
-                    const imgProps = pdf.getImageProperties(imgData);
-                    const pdfWidth = pdf.internal.pageSize.getWidth();
-                    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-                    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-                    pdf.save(`Razpisanie_${selectedClass}.pdf`);
-                });
-            };
-
-            const askAI = async () => {
-                setAiStatus("Анализиране на разписанието...");
-                const prompt = `Аз съм администратор на ЦСОП "Леда Милева". Учебна година ${ACADEMIC_YEAR}, Срок ${selectedTerm}. 
-                Имам следното разписание за клас ${selectedClass}: ${JSON.stringify(data.schedule[selectedTerm][selectedClass] || {})}. 
-                Моите допълнителни инструкции са: ${data.aiInstructions}. 
-                Дай ми кратки препоръки за оптимизация или потвърди ако логиката е добра.`;
-                
-                try {
-                    // Exponential backoff logic for Gemini API
-                    let result;
-                    for (let i = 0; i < 5; i++) {
-                        try {
-                            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                            });
-                            if (response.ok) {
-                                result = await response.json();
-                                break;
-                            }
-                        } catch (e) {}
-                        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
-                    }
-                    
-                    setAiStatus(result?.candidates?.[0]?.content?.parts?.[0]?.text || "Грешка при връзка с AI.");
-                } catch (e) {
-                    setAiStatus("Неуспешно свързване с AI.");
-                }
-            };
-
-            if (loading) return (
-                <div className="h-screen flex flex-col items-center justify-center font-bold text-indigo-600 bg-slate-50">
-                    <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-                    <span className="animate-pulse">ЗАРЕЖДАНЕ НА СИСТЕМАТА...</span>
-                </div>
-            );
-
-            return (
-                <div className="min-h-screen pb-12">
-                    <header className="bg-white border-b border-slate-200 px-6 py-4 mb-6 sticky top-0 z-50 shadow-sm no-print">
-                        <div className="max-w-[1400px] mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div className="flex items-center gap-4">
-                                <div className="bg-indigo-600 text-white w-10 h-10 flex items-center justify-center rounded-lg font-black italic">ЛМ</div>
-                                <div>
-                                    <h1 className="font-black text-slate-800 text-sm uppercase tracking-tight">ЦСОП "Леда Милева" • {ACADEMIC_YEAR}</h1>
-                                    <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-widest">Седмично разписание • {selectedTerm} Срок</p>
-                                </div>
-                            </div>
-                            <nav className="flex bg-slate-100 p-1 rounded-xl">
-                                {[
-                                    {id: 'schedule', label: 'Разписание'},
-                                    {id: 'plan', label: 'Учебен План'},
-                                    {id: 'settings', label: 'База данни'},
-                                    {id: 'constraints', label: 'Забрани'}
-                                ].map(t => (
-                                    <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${activeTab === t.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>{t.label}</button>
-                                ))}
-                            </nav>
+    return (
+        <div className="min-h-screen bg-[#f8fafc] p-4 md:p-6 font-sans text-slate-800">
+            {/* Header */}
+            <header className="max-w-7xl mx-auto mb-6 bg-white p-6 rounded-[32px] shadow-sm flex flex-col md:flex-row justify-between items-center gap-6 border border-slate-200">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    </div>
+                    <div>
+                        <h1 className="text-xl font-black uppercase tracking-tight leading-none">ЦСОП "Леда Милева"</h1>
+                        <div className="flex gap-3 mt-2">
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 py-0.5 bg-slate-100 rounded-md italic">{selectedYear}</span>
+                            <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest px-2 py-0.5 bg-indigo-50 rounded-md italic">{selectedTerm} Срок</span>
+                            <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md italic ${isOnline ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                                {isOnline ? 'ОБЛАК: СВЪРЗАН' : 'ОБЛАК: ОФЛАЙН'}
+                            </span>
                         </div>
-                    </header>
-
-                    <div className="max-w-[1400px] mx-auto px-4">
-                        {activeTab === 'schedule' && (
-                            <div className="space-y-6">
-                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-wrap items-center justify-between gap-4 no-print">
-                                    <div className="flex items-center gap-3">
-                                        <select value={selectedTerm} onChange={e => setSelectedTerm(parseInt(e.target.value))} className="p-2.5 bg-slate-50 border-none rounded-lg text-xs font-bold ring-1 ring-slate-200">
-                                            <option value={1}>1-ви Срок</option>
-                                            <option value={2}>2-ри Срок</option>
-                                        </select>
-                                        <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="p-2.5 bg-slate-50 border-none rounded-lg text-xs font-bold ring-1 ring-slate-200">
-                                            {data.classes?.map(c => <option key={c} value={c}>Паралелка {c}</option>)}
-                                        </select>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button onClick={generateSchedule} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-[10px] font-black uppercase hover:bg-indigo-700 transition-all">Генерирай</button>
-                                        <button onClick={exportPDF} className="bg-slate-800 text-white px-4 py-2.5 rounded-lg text-[10px] font-black uppercase flex items-center gap-2">PDF</button>
-                                        <button onClick={exportExcel} className="bg-emerald-600 text-white px-4 py-2.5 rounded-lg text-[10px] font-black uppercase flex items-center gap-2">Excel</button>
-                                    </div>
-                                </div>
-
-                                <div ref={scheduleRef} className="bg-white p-8 rounded-[32px] shadow-xl shadow-slate-200/50 border border-slate-100">
-                                    <div className="mb-6 text-center border-b border-slate-100 pb-6">
-                                        <h2 className="text-xl font-black text-slate-800 uppercase italic">Седмично Разписание - {selectedClass}</h2>
-                                        <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-widest">{selectedTerm} Срок • Учебна {ACADEMIC_YEAR} година</p>
-                                    </div>
-                                    <div className="schedule-grid">
-                                        <div className="grid-header grid-time">Час</div>
-                                        {DAYS.map(d => <div key={d} className="grid-header">{d}</div>)}
-                                        {PERIODS.map(p => (
-                                            <React.Fragment key={p}>
-                                                <div className="grid-cell grid-time">{p}</div>
-                                                {DAYS.map(d => {
-                                                    const item = data.schedule?.[selectedTerm]?.[selectedClass]?.[`${d}-${p}`];
-                                                    return (
-                                                        <div key={d} className="grid-cell">
-                                                            {item ? (
-                                                                <div className={`lesson-card ${p > 5 ? 'opacity-70 grayscale-[0.3]' : ''}`}>
-                                                                    <span className="text-[10px] font-black text-indigo-700 text-center leading-tight px-1">{item.subject}</span>
-                                                                    <span className="text-[8px] font-bold text-slate-400 uppercase mt-1 tracking-tighter">{item.teacher}</span>
-                                                                </div>
-                                                            ) : <div className="w-1 h-1 bg-slate-100 rounded-full"></div>}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </React.Fragment>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="bg-indigo-50 p-6 rounded-[32px] border border-indigo-100 no-print">
-                                    <h3 className="text-xs font-black text-indigo-600 uppercase mb-4 flex items-center gap-2 italic">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                        Интелигентен Помощник (AI)
-                                    </h3>
-                                    <textarea 
-                                        value={data.aiInstructions} 
-                                        onChange={e => setData({...data, aiInstructions: e.target.value})}
-                                        className="w-full p-4 rounded-2xl border-none ring-1 ring-indigo-200 outline-none text-sm font-medium mb-4 placeholder:italic"
-                                        placeholder="Напишете тук ваши специфични условия..."
-                                        rows="2"
-                                    />
-                                    <div className="flex justify-between items-start">
-                                        <button onClick={askAI} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase shadow-lg shadow-indigo-200">Анализирай разписанието</button>
-                                        <div className="text-[11px] font-bold text-slate-600 max-w-[70%] bg-white p-4 rounded-2xl shadow-sm italic leading-relaxed">
-                                            {aiStatus || "Очаквам вашите инструкции за анализ..."}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'plan' && (
-                            <div className="grid lg:grid-cols-12 gap-8 animate-in slide-in-from-bottom-4">
-                                <div className="lg:col-span-4 space-y-4">
-                                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                                        <div className="flex justify-between items-center mb-6">
-                                            <h3 className="text-xs font-black uppercase text-slate-400 tracking-widest">Добавяне на часове</h3>
-                                            <button onClick={copyPlan} className="text-[8px] bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-black uppercase">Копирай от 1 за 2 срок</button>
-                                        </div>
-                                        <div className="space-y-4">
-                                            <select id="pClass" className="w-full p-3 bg-slate-50 rounded-xl font-bold border-none ring-1 ring-slate-200 text-sm">
-                                                {data.classes?.map(c => <option key={c} value={c}>{c}</option>)}
-                                            </select>
-                                            <select id="pSub" className="w-full p-3 bg-slate-50 rounded-xl font-bold border-none ring-1 ring-slate-200 text-sm">
-                                                {data.subjects?.map(s => <option key={s} value={s}>{s}</option>)}
-                                            </select>
-                                            <select id="pTea" className="w-full p-3 bg-slate-50 rounded-xl font-bold border-none ring-1 ring-slate-200 text-sm">
-                                                {data.teachers?.map(t => <option key={t} value={t}>{t}</option>)}
-                                            </select>
-                                            <input id="pHrs" type="number" placeholder="Брой часове" className="w-full p-3 bg-slate-50 rounded-xl font-bold border-none ring-1 ring-slate-200 text-sm" />
-                                            <button onClick={() => {
-                                                const cls = document.getElementById('pClass').value;
-                                                const sub = document.getElementById('pSub').value;
-                                                const tea = document.getElementById('pTea').value;
-                                                const hrs = parseInt(document.getElementById('pHrs').value);
-                                                if (!hrs || isNaN(hrs)) return;
-                                                const updated = JSON.parse(JSON.stringify(data.curriculum));
-                                                if(!updated[selectedTerm][cls]) updated[selectedTerm][cls] = [];
-                                                for(let i=0; i<hrs; i++) updated[selectedTerm][cls].push({subject: sub, teacher: tea, id: Math.random()});
-                                                updateDB({...data, curriculum: updated});
-                                            }} className="w-full bg-slate-900 text-white py-4 rounded-xl font-black uppercase text-[10px] tracking-widest">Добави в План</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="lg:col-span-8 bg-white p-6 rounded-3xl border border-slate-100">
-                                    <h3 className="text-xs font-black uppercase text-slate-400 mb-4">Активен учебен план - {selectedTerm} срок</h3>
-                                    <div className="grid md:grid-cols-2 gap-4">
-                                        {data.classes?.map(cls => (
-                                            <div key={cls} className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                                <h4 className="font-black text-xs text-indigo-600 mb-2">{cls} паралелка</h4>
-                                                <div className="space-y-1">
-                                                    {Object.entries((data.curriculum[selectedTerm][cls] || []).reduce((a,b)=>{
-                                                        const k = `${b.subject}|${b.teacher}`; a[k] = (a[k]||0)+1; return a;
-                                                    }, {})).map(([k, count]) => (
-                                                        <div key={k} className="flex justify-between text-[10px] font-bold bg-white p-2 rounded-lg shadow-sm">
-                                                            <span>{k.split('|')[0]} ({k.split('|')[1]})</span>
-                                                            <span className="text-indigo-500">{count} ч.</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'settings' && (
-                            <div className="grid md:grid-cols-3 gap-8 animate-in fade-in">
-                                {[
-                                    { k: 'teachers', l: 'Преподаватели' },
-                                    { k: 'subjects', l: 'Предмети' },
-                                    { k: 'classes', l: 'Класове/Паралелки' }
-                                ].map(cat => (
-                                    <div key={cat.k} className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm">
-                                        <h3 className="text-[10px] font-black uppercase text-slate-400 mb-4 tracking-widest">{cat.l}</h3>
-                                        <div className="space-y-2 mb-4 max-h-64 overflow-y-auto pr-2">
-                                            {data[cat.k]?.map((v, i) => (
-                                                <div key={i} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl text-xs font-bold group">
-                                                    {v}
-                                                    <button onClick={() => {
-                                                        const updated = data[cat.k].filter((_, idx) => idx !== i);
-                                                        updateDB({ ...data, [cat.k]: updated });
-                                                    }} className="text-rose-300 opacity-0 group-hover:opacity-100 hover:text-rose-500 font-black">×</button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <input id={`add-${cat.k}`} className="flex-1 p-3 rounded-xl border border-slate-200 text-xs font-bold outline-none" placeholder="..." />
-                                            <button onClick={() => {
-                                                const v = document.getElementById(`add-${cat.k}`).value;
-                                                if(v) updateDB({...data, [cat.k]: [...(data[cat.k]||[]), v]});
-                                                document.getElementById(`add-${cat.k}`).value = "";
-                                            }} className="bg-indigo-600 text-white px-4 rounded-xl font-black">+</button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {activeTab === 'constraints' && (
-                            <div className="grid md:grid-cols-2 gap-8 animate-in slide-in-from-left-4">
-                                <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                                    <h3 className="text-xs font-black uppercase text-rose-500 mb-6 flex items-center gap-2">
-                                        <div className="w-2 h-2 bg-rose-500 rounded-full animate-pulse"></div> Нова Забрана
-                                    </h3>
-                                    <div className="space-y-4">
-                                        <select id="cT" className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none ring-1 ring-slate-100">
-                                            {data.teachers?.map(t => <option key={t}>{t}</option>)}
-                                        </select>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <select id="cD" className="p-4 bg-slate-50 rounded-2xl font-bold border-none ring-1 ring-slate-100">
-                                                {DAYS.map(d => <option key={d}>{d}</option>)}
-                                            </select>
-                                            <select id="cP" className="p-4 bg-slate-50 rounded-2xl font-bold border-none ring-1 ring-slate-100">
-                                                {PERIODS.map(p => <option key={p} value={p}>{p} час</option>)}
-                                            </select>
-                                        </div>
-                                        <button onClick={() => {
-                                            const newC = {
-                                                teacher: document.getElementById('cT').value,
-                                                day: document.getElementById('cD').value,
-                                                period: document.getElementById('cP').value
-                                            };
-                                            updateDB({ ...data, constraints: [...(data.constraints || []), newC] });
-                                        }} className="w-full bg-rose-500 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-lg shadow-rose-100">Добави Ограничение</button>
-                                    </div>
-                                </div>
-                                <div className="space-y-3 overflow-y-auto max-h-[500px]">
-                                    <h3 className="text-[10px] font-black uppercase text-slate-400 pl-2">Активни Забрани</h3>
-                                    {data.constraints?.map((c, i) => (
-                                        <div key={i} className="bg-white p-4 rounded-2xl border border-slate-100 flex justify-between items-center shadow-sm">
-                                            <div className="flex flex-col">
-                                                <span className="text-xs font-black text-slate-800">{c.teacher}</span>
-                                                <span className="text-[9px] font-bold text-rose-500 uppercase mt-1 italic">{c.day} • {c.period} час</span>
-                                            </div>
-                                            <button onClick={() => {
-                                                const updated = data.constraints.filter((_, idx) => idx !== i);
-                                                updateDB({ ...data, constraints: updated });
-                                            }} className="text-slate-300 hover:text-rose-500 text-xl font-black px-2">×</button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
                     </div>
                 </div>
-            );
-        }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                <div className="flex bg-slate-100 p-1 rounded-2xl overflow-x-auto max-w-full">
+                    {[
+                        {id: 'schedule', label: 'Разписание'},
+                        {id: 'curriculum', label: 'Учебен План'},
+                        {id: 'resources', label: 'База Данни'},
+                        {id: 'constraints', label: 'Забрани'}
+                    ].map(t => (
+                        <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase whitespace-nowrap transition-all ${activeTab === t.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+            </header>
+
+            <main className="max-w-7xl mx-auto">
+                {activeTab === 'curriculum' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-1 bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 h-fit">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">
+                                <span className="w-2 h-6 bg-indigo-600 rounded-full inline-block"></span>
+                                Добави в план
+                            </h2>
+                            <div className="space-y-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Паралелка</label>
+                                    <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500 transition-all">
+                                        {data.classes.map(c => <option key={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Преподавател</label>
+                                    <select id="addT" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100">
+                                        {data.teachers.map(t => <option key={t}>{t}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Предмет</label>
+                                    <select id="addS" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100">
+                                        {data.subjects.map(s => <option key={s}>{s}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Брой часове</label>
+                                    <input id="addH" type="number" defaultValue="1" min="1" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100" />
+                                </div>
+                                <button onClick={() => addCurriculumEntry(document.getElementById('addT').value, document.getElementById('addS').value, document.getElementById('addH').value)} className="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black uppercase text-[11px] shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all mt-4">
+                                    Запиши в плана
+                                </button>
+                                {selectedTerm === 1 && (
+                                    <button onClick={copyToSecondTerm} className="w-full bg-emerald-50 text-emerald-600 p-4 rounded-2xl font-black uppercase text-[10px] border border-emerald-100 mt-2 hover:bg-emerald-100 transition-colors">
+                                        Копирай към II срок
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 min-h-[600px]">
+                            <div className="flex justify-between items-center mb-8 border-b border-slate-50 pb-6">
+                                <div>
+                                    <h2 className="text-lg font-black uppercase text-slate-800 tracking-tight">Разпределение: {selectedClass}</h2>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Текущи записи за {selectedTerm} Срок</p>
+                                </div>
+                                <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                                    <button onClick={() => setSelectedTerm(1)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${selectedTerm === 1 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>I Срок</button>
+                                    <button onClick={() => setSelectedTerm(2)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${selectedTerm === 2 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>II Срок</button>
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-3">
+                                {(getTermData(selectedYear, selectedTerm)[selectedClass] || []).length === 0 ? (
+                                    <div className="p-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest border-2 border-dashed border-slate-100 rounded-[32px]">Няма записи</div>
+                                ) : (
+                                    (getTermData(selectedYear, selectedTerm)[selectedClass] || []).map((entry, idx) => (
+                                        <div key={entry.id || idx} className="flex items-center justify-between p-6 bg-slate-50 rounded-[28px] hover:bg-white hover:shadow-md transition-all border border-transparent hover:border-indigo-100 group">
+                                            <div className="flex items-center gap-6">
+                                                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-indigo-600 font-black">{entry.hours}</div>
+                                                <div>
+                                                    <p className="font-black text-slate-800 uppercase text-xs">{entry.teacher}</p>
+                                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-1">{entry.subject}</p>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => removeCurriculumEntry(entry.id)} className="text-slate-300 hover:text-red-500 transition-colors p-2">
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'resources' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">Персонал</h2>
+                            <div className="flex gap-2 mb-6">
+                                <input id="newT" type="text" placeholder="Име на учител..." className="flex-1 p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500" />
+                                <button onClick={() => {
+                                    const val = document.getElementById('newT').value;
+                                    if(val) { updateCloud({...data, teachers: [...data.teachers, val]}); document.getElementById('newT').value = ""; }
+                                }} className="bg-indigo-600 text-white px-6 rounded-2xl font-black text-xl hover:bg-indigo-700 shadow-lg">+</button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2">
+                                {data.teachers.map(t => (
+                                    <div key={t} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl group hover:bg-white border border-transparent hover:border-slate-100">
+                                        <span className="font-bold text-sm text-slate-700">{t}</span>
+                                        <button onClick={() => updateCloud({...data, teachers: data.teachers.filter(x => x !== t)})} className="text-slate-200 hover:text-red-500 transition-all p-2 text-xs font-black uppercase">Изтрий</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">Предмети и Терапии</h2>
+                            <div className="flex gap-2 mb-6">
+                                <input id="newS" type="text" placeholder="Име на предмет..." className="flex-1 p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500" />
+                                <button onClick={() => {
+                                    const val = document.getElementById('newS').value;
+                                    if(val) { updateCloud({...data, subjects: [...data.subjects, val]}); document.getElementById('newS').value = ""; }
+                                }} className="bg-indigo-600 text-white px-6 rounded-2xl font-black text-xl hover:bg-indigo-700 shadow-lg">+</button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2">
+                                {data.subjects.map(s => (
+                                    <div key={s} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl group hover:bg-white border border-transparent hover:border-slate-100">
+                                        <span className="font-bold text-sm text-slate-700">{s}</span>
+                                        <button onClick={() => updateCloud({...data, subjects: data.subjects.filter(x => x !== s)})} className="text-slate-200 hover:text-red-500 transition-all p-2 text-xs font-black uppercase">Изтрий</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'schedule' && (
+                    <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200">
+                        <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-6">
+                            <div>
+                                <h2 className="text-2xl font-black uppercase tracking-tight">Седмичен График</h2>
+                                <div className="flex gap-4 mt-2">
+                                    <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="bg-slate-100 text-slate-600 border-none rounded-lg text-[10px] font-black uppercase px-3 py-1 outline-none">
+                                        {data.classes.map(c => <option key={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <button onClick={generateSchedule} className="bg-indigo-600 text-white px-10 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-3">
+                                Генерирай Глобално Разписание
+                            </button>
+                        </div>
+
+                        <div className="overflow-x-auto rounded-[40px] border border-slate-100 bg-slate-50 p-6 shadow-inner">
+                            <div className="min-w-[1000px]">
+                                <div className="grid grid-cols-[80px_repeat(5,1fr)] gap-4 mb-6 px-4 text-center">
+                                    <div className="p-2"></div>
+                                    {DAYS.map(d => <div key={d} className="p-4 bg-white rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-400 border border-slate-100">{d}</div>)}
+                                </div>
+                                {PERIODS.map(p => (
+                                    <div key={p} className="grid grid-cols-[80px_repeat(5,1fr)] gap-4 mb-4 px-4 text-center">
+                                        <div className="flex items-center justify-center font-black text-slate-200 text-3xl italic">{p}</div>
+                                        {DAYS.map(d => {
+                                            const cell = data.schedule[selectedYear]?.[selectedTerm]?.[selectedClass]?.[`${d}-${p}`];
+                                            return (
+                                                <div key={d} className={`min-h-[110px] rounded-[32px] p-4 flex flex-col justify-center items-center border-2 transition-all ${cell ? 'bg-white border-white shadow-md' : 'bg-transparent border-dashed border-slate-200 opacity-40'}`}>
+                                                    {cell ? (
+                                                        <>
+                                                            <div className="bg-indigo-50 text-indigo-600 text-[8px] font-black px-3 py-1 rounded-full mb-2 uppercase">{cell.subject}</div>
+                                                            <div className="font-bold text-slate-700 text-[10px] uppercase leading-tight">{cell.teacher}</div>
+                                                        </>
+                                                    ) : <div className="text-[7px] font-black text-slate-100 uppercase tracking-widest italic">Свободен</div>}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'constraints' && (
+                    <div className="max-w-2xl mx-auto">
+                        <div className="bg-red-50 p-10 rounded-[48px] border border-red-100 mb-8">
+                            <h2 className="text-xl font-black mb-8 uppercase text-red-800 text-center tracking-tight">Добави Ограничение</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <select id="conT" className="p-4 rounded-2xl font-bold bg-white text-xs shadow-sm">{data.teachers.map(t => <option key={t}>{t}</option>)}</select>
+                                <select id="conD" className="p-4 rounded-2xl font-bold bg-white text-xs shadow-sm">{DAYS.map(d => <option key={d}>{d}</option>)}</select>
+                                <select id="conP" className="p-4 rounded-2xl font-bold bg-white text-xs shadow-sm">{PERIODS.map(p => <option key={p} value={p}>{p}-ти час</option>)}</select>
+                            </div>
+                            <button onClick={() => {
+                                const t = document.getElementById('conT').value;
+                                const d = document.getElementById('conD').value;
+                                const p = document.getElementById('conP').value;
+                                updateCloud({...data, constraints: [...data.constraints, {teacher: t, day: d, period: p}]});
+                            }} className="w-full mt-6 bg-red-600 text-white p-5 rounded-2xl font-black uppercase text-[11px] shadow-xl hover:bg-red-700 transition-all">Блокирай този час</button>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            {data.constraints.map((c, i) => (
+                                <div key={i} className="bg-white p-6 rounded-[32px] border border-slate-100 flex justify-between items-center group">
+                                    <div className="flex items-center gap-5">
+                                        <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center text-red-400 font-black italic">!</div>
+                                        <div>
+                                            <p className="font-black text-slate-800 uppercase text-xs">{c.teacher}</p>
+                                            <p className="text-[10px] font-bold text-red-400 uppercase tracking-widest mt-1">{c.day} • {c.period} час</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => updateCloud({...data, constraints: data.constraints.filter((_, idx) => idx !== i)})} className="text-slate-200 hover:text-red-500 font-black text-[10px] uppercase transition-colors">Премахни</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </main>
+            
+            <footer className="max-w-7xl mx-auto mt-16 text-center pb-12">
+                <p className="text-[9px] font-black uppercase tracking-[0.8em] text-slate-300">CSOP Leda Mileva • Professional ERP • Cloud Integrated</p>
+            </footer>
+        </div>
+    );
+}
