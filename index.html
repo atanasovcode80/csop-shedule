@@ -3,27 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ЦСОП "Леда Милева" - Система за Разписания</title>
+    <title>Система за Разписания - ЦСОП "Леда Милева"</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
     <style>
-        body { font-family: 'Montserrat', sans-serif; background-color: #f8faff; }
-        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
-        @media print { .no-print { display: none !important; } body { background: white; } }
+        body { font-family: 'Montserrat', sans-serif; background-color: #f1f5f9; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); border: 1px solid #e2e8f0; }
+        @media print { .no-print { display: none !important; } .print-only { display: block !important; } }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
+    <script>
+        window.FIREBASE_CONFIG = {
+            apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
+            authDomain: "generator-razpisanie.firebaseapp.com",
+            databaseURL: "https://generator-razpisanie-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "generator-razpisanie",
+            storageBucket: "generator-razpisanie.firebasestorage.app",
+            messagingSenderId: "756529315524",
+            appId: "1:756529315524:web:faa5e91bdd62c2e05ed391"
+        };
+        window.APP_ID = "csop-leda-mileva-v2";
+    </script>
+
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-
-        window.FB_SDK = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot };
+        window.FB_SDK = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, getFirestore, doc, setDoc, onSnapshot };
     </script>
 
     <script type="text/babel">
@@ -36,188 +51,343 @@
             const [term, setTerm] = useState('1');
             const [selectedClass, setSelectedClass] = useState('');
             const [isSyncing, setIsSyncing] = useState(false);
-            const [data, setData] = useState({ teachers: [], subjects: [], classes: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } });
+            
+            // Данни
+            const [data, setData] = useState({
+                teachers: [],
+                subjects: [],
+                classes: [],
+                curriculum: { '1': {}, '2': {} },
+                schedules: { '1': {}, '2': {} },
+                customConditions: ""
+            });
 
+            // Форми за учебен план
+            const [curForm, setCurForm] = useState({ tId: '', sub: '', hours: 1 });
+
+            // 1. Инициализация
             useEffect(() => {
                 const init = async () => {
                     if (!window.FB_SDK) return setTimeout(init, 200);
-                    
-                    try {
-                        // Проверка за налична конфигурация
-                        const config = window.__firebase_config ? JSON.parse(window.__firebase_config) : null;
-                        if (!config) {
-                            console.warn("Firebase config missing - using local mode");
-                            setReady(true);
-                            return;
-                        }
-
-                        const app = window.FB_SDK.initializeApp(config);
-                        const auth = window.FB_SDK.getAuth(app);
-
-                        if (window.__initial_auth_token) {
-                            await window.FB_SDK.signInWithCustomToken(auth, window.__initial_auth_token);
-                        } else {
-                            await window.FB_SDK.signInAnonymously(auth);
-                        }
-
-                        window.FB_SDK.onAuthStateChanged(auth, (u) => {
-                            setUser(u);
-                            setReady(true);
-                        });
-                    } catch (err) {
-                        console.error("Init error:", err);
-                        setReady(true); // Позволява работа дори при грешка в облака
-                    }
+                    const app = window.FB_SDK.initializeApp(window.FIREBASE_CONFIG);
+                    const auth = window.FB_SDK.getAuth(app);
+                    await window.FB_SDK.signInAnonymously(auth);
+                    window.FB_SDK.onAuthStateChanged(auth, u => { setUser(u); setReady(true); });
                 };
                 init();
             }, []);
 
+            // 2. Синхронизация
             useEffect(() => {
-                if (!user || !window.FB_SDK) return;
+                if (!user) return;
                 const db = window.FB_SDK.getFirestore();
-                const appId = window.__app_id || 'csop-leda-mileva-v1';
-                const docRef = window.FB_SDK.doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'master_config');
-
-                return window.FB_SDK.onSnapshot(docRef, (snap) => {
-                    if (snap.exists()) setData(prev => ({ ...prev, ...snap.data() }));
+                const docRef = window.FB_SDK.doc(db, 'artifacts', window.APP_ID, 'public', 'data', 'settings', 'master');
+                return window.FB_SDK.onSnapshot(docRef, snap => {
+                    if (snap.exists()) setData(prev => ({...prev, ...snap.data()}));
                 });
             }, [user]);
 
-            const save = async (newData) => {
+            const save = async (updated) => {
                 if (!user) return;
                 setIsSyncing(true);
                 try {
                     const db = window.FB_SDK.getFirestore();
-                    const appId = window.__app_id || 'csop-leda-mileva-v1';
-                    await window.FB_SDK.setDoc(window.FB_SDK.doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'master_config'), newData);
+                    await window.FB_SDK.setDoc(window.FB_SDK.doc(db, 'artifacts', window.APP_ID, 'public', 'data', 'settings', 'master'), updated);
                 } finally { setIsSyncing(false); }
             };
 
-            // Помощна функция за актуализация
-            const update = (fields) => {
+            // Логика за Генериране на Разписание (Интелигентна)
+            const generateSchedule = () => {
+                const plan = data.curriculum[term][selectedClass] || [];
+                let newSched = { 0:{}, 1:{}, 2:{}, 3:{}, 4:{} };
+                let tasks = [];
+
+                plan.forEach(item => {
+                    for(let i=0; i<item.hours; i++) tasks.push({ sub: item.sub, tId: item.tId });
+                });
+
+                // Сортираме по "малки класове" приоритет (ако името на паралелката съдържа ПГ или I)
+                tasks.sort(() => Math.random() - 0.5);
+
+                tasks.forEach(task => {
+                    let placed = false;
+                    // Първи опит: 1-5 час (Приоритетни)
+                    for(let h=1; h<=5; h++) {
+                        for(let d=0; d<5; d++) {
+                            if (!newSched[d][h] && !isTeacherBusy(d, h, task.tId)) {
+                                newSched[d][h] = task;
+                                placed = true; break;
+                            }
+                        }
+                        if(placed) break;
+                    }
+                    // Втори опит: 6-7 час (Ако няма място)
+                    if (!placed) {
+                        for(let h=6; h<=7; h++) {
+                            for(let d=0; d<5; d++) {
+                                if (!newSched[d][h] && !isTeacherBusy(d, h, task.tId)) {
+                                    newSched[d][h] = task;
+                                    placed = true; break;
+                                }
+                            }
+                            if(placed) break;
+                        }
+                    }
+                });
+
+                const updatedSchedules = {...data.schedules};
+                updatedSchedules[term][selectedClass] = newSched;
+                updateData({ schedules: updatedSchedules });
+            };
+
+            const isTeacherBusy = (day, hour, tId) => {
+                // Проверка дали учителят има час в друга паралелка по същото време
+                const currentTermSchedules = data.schedules[term];
+                for (let className in currentTermSchedules) {
+                    if (currentTermSchedules[className][day]?.[hour]?.tId === tId) return true;
+                }
+                return false;
+            };
+
+            // Функции за Учебен план
+            const copyTermPlan = () => {
+                const updatedCur = {...data.curriculum};
+                updatedCur['2'] = JSON.parse(JSON.stringify(updatedCur['1']));
+                updateData({ curriculum: updatedCur });
+                alert("Планът от 1-ви срок е копиран успешно в 2-ри срок!");
+            };
+
+            const updateData = (fields) => {
                 const newData = { ...data, ...fields };
                 setData(newData);
                 save(newData);
             };
 
-            if (!ready) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse uppercase tracking-[0.2em]">Свързване...</div>;
+            // Експорт
+            const exportExcel = () => {
+                const worksheet = XLSX.utils.json_to_sheet([ { "Срок": term, "Клас": selectedClass } ]);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Schedule");
+                XLSX.writeFile(workbook, `Razpisanie_${selectedClass}.xlsx`);
+            };
+
+            if (!ready) return <div className="h-screen flex items-center justify-center font-black text-indigo-600 animate-pulse uppercase tracking-[0.3em]">Зареждане...</div>;
 
             return (
                 <div className="min-h-screen pb-10">
-                    <header className="bg-white p-4 shadow-sm flex items-center justify-between sticky top-0 z-50 no-print">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black shadow-lg">Ц</div>
-                            <h1 className="text-xs font-black text-slate-800 uppercase">ЦСОП "Леда Милева"</h1>
-                        </div>
-                        <div className="flex bg-slate-100 p-1 rounded-xl">
-                            {['schedule', 'curriculum', 'database'].map(t => (
-                                <button key={t} onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${activeTab === t ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}>
-                                    {t === 'schedule' ? 'График' : t === 'curriculum' ? 'План' : 'База'}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-orange-400 animate-ping' : 'bg-green-500'}`}></div>
-                            <select value={term} onChange={e => setTerm(e.target.value)} className="bg-indigo-50 text-indigo-700 font-black text-[10px] px-3 py-1.5 rounded-lg outline-none">
-                                <option value="1">I СРОК</option>
-                                <option value="2">II СРОК</option>
-                            </select>
+                    <header className="bg-slate-900 text-white p-6 shadow-2xl no-print">
+                        <div className="max-w-7xl mx-auto flex justify-between items-center">
+                            <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-indigo-500 rounded-2xl flex items-center justify-center text-2xl font-black">Ц</div>
+                                <div>
+                                    <h1 className="text-lg font-black uppercase tracking-tighter">ЦСОП "Леда Милева"</h1>
+                                    <p className="text-[10px] text-indigo-300 font-bold uppercase tracking-widest">Учебна година: 2025/2026 • {term} СРОК</p>
+                                </div>
+                            </div>
+                            <div className="flex bg-slate-800 p-1.5 rounded-2xl gap-1">
+                                {['schedule', 'curriculum', 'database'].map(t => (
+                                    <button key={t} onClick={() => setActiveTab(t)} 
+                                        className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === t ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                        {t === 'schedule' ? 'Разписание' : t === 'curriculum' ? 'Учебен План' : 'База Данни'}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </header>
 
-                    <main className="max-w-6xl mx-auto p-6">
+                    <main className="max-w-7xl mx-auto p-6">
                         {activeTab === 'schedule' && (
                             <div className="space-y-6">
-                                <div className="glass-card p-6 rounded-3xl flex gap-4 no-print items-end">
+                                <div className="glass-card p-6 rounded-[2.5rem] flex items-end gap-4 no-print shadow-xl">
                                     <div className="flex-1">
-                                        <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-1">Избор на паралелка</label>
-                                        <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 outline-none border border-slate-100">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-2 block ml-2">Избор на паралелка</label>
+                                        <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none border-2 border-transparent focus:border-indigo-100">
                                             <option value="">-- Изберете --</option>
                                             {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
-                                    <button onClick={() => window.print()} className="h-12 w-12 flex items-center justify-center bg-slate-800 text-white rounded-xl">🖨️</button>
+                                    <button onClick={generateSchedule} className="h-14 px-8 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase shadow-lg hover:scale-105 transition-all">Генерирай</button>
+                                    <div className="flex gap-2">
+                                        <button onClick={exportExcel} className="h-14 w-14 flex items-center justify-center bg-emerald-500 text-white rounded-2xl shadow-lg hover:bg-emerald-600">XL</button>
+                                        <button onClick={() => window.print()} className="h-14 w-14 flex items-center justify-center bg-slate-800 text-white rounded-2xl shadow-lg">PDF</button>
+                                    </div>
                                 </div>
 
-                                {selectedClass ? (
-                                    <div className="bg-white rounded-[2rem] shadow-xl overflow-hidden border border-slate-100">
-                                        <div className="p-8 text-center bg-indigo-50/30">
-                                            <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">{selectedClass}</h2>
-                                            <p className="text-[9px] font-bold text-indigo-500 uppercase mt-2">Седмично разписание</p>
+                                {selectedClass && (
+                                    <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
+                                        <div className="p-10 text-center bg-slate-50 border-b">
+                                            <h2 className="text-4xl font-black text-slate-900 uppercase tracking-tighter">{selectedClass}</h2>
+                                            <p className="text-xs font-black text-indigo-500 uppercase tracking-[0.4em] mt-4">Учебна 2025/2026г. • {term} Срок</p>
                                         </div>
-                                        <table className="w-full text-center border-collapse">
-                                            <thead>
-                                                <tr className="bg-slate-50">
-                                                    <th className="p-4 border-b text-[10px] font-black text-slate-300">№</th>
-                                                    {['Пон', 'Втор', 'Сряда', 'Четв', 'Пет'].map(d => <th key={d} className="p-4 border-b text-[10px] font-black text-slate-600 uppercase">{d}</th>)}
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {[1,2,3,4,5,6,7].map(h => (
-                                                    <tr key={h} className="border-b border-slate-50 last:border-0">
-                                                        <td className="p-6 font-black text-slate-200 text-2xl">{h}</td>
-                                                        {[0,1,2,3,4].map(di => {
-                                                            const cell = data.schedules[term]?.[selectedClass]?.[di]?.[h];
-                                                            const teacher = data.teachers.find(t => t.id === cell?.tId);
-                                                            return (
-                                                                <td key={di} className="p-2 min-w-[120px]">
-                                                                    {cell && (
-                                                                        <div className="bg-white border border-indigo-50 p-3 rounded-2xl shadow-sm">
-                                                                            <p className="text-slate-800 font-black text-[10px] uppercase leading-tight">{cell.sub}</p>
-                                                                            <p className="text-indigo-400 font-bold text-[7px] uppercase mt-2">{teacher?.name}</p>
-                                                                        </div>
-                                                                    )}
-                                                                </td>
-                                                            );
-                                                        })}
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full">
+                                                <thead>
+                                                    <tr className="bg-slate-100/50">
+                                                        <th className="p-6 text-[10px] font-black text-slate-400 uppercase">Час</th>
+                                                        {['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'].map(d => <th key={d} className="p-6 text-[11px] font-black text-slate-700 uppercase tracking-widest">{d}</th>)}
                                                     </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                                </thead>
+                                                <tbody>
+                                                    {[1,2,3,4,5,6,7].map(h => (
+                                                        <tr key={h} className="border-b border-slate-50">
+                                                            <td className="p-8 text-center font-black text-slate-200 text-4xl">{h}</td>
+                                                            {[0,1,2,3,4].map(di => {
+                                                                const cell = data.schedules[term]?.[selectedClass]?.[di]?.[h];
+                                                                const t = data.teachers.find(x => x.id === cell?.tId);
+                                                                return (
+                                                                    <td key={di} className="p-2 min-w-[180px]">
+                                                                        {cell && (
+                                                                            <div className={`p-4 rounded-3xl text-center shadow-sm border-2 ${h > 5 ? 'bg-orange-50 border-orange-100' : 'bg-white border-indigo-50'}`}>
+                                                                                <p className="text-slate-800 font-black text-[11px] uppercase">{cell.sub}</p>
+                                                                                <p className="text-indigo-400 font-bold text-[8px] uppercase mt-2 italic">{t?.name}</p>
+                                                                            </div>
+                                                                        )}
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
-                                ) : (
-                                    <div className="py-20 text-center glass-card rounded-3xl border-2 border-dashed border-slate-200 text-slate-400 font-black uppercase text-xs">Изберете паралелка</div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'curriculum' && (
+                            <div className="max-w-4xl mx-auto space-y-6">
+                                <div className="glass-card p-8 rounded-[3rem] shadow-xl">
+                                    <div className="flex justify-between items-center mb-8 border-b pb-6">
+                                        <h3 className="text-sm font-black uppercase text-indigo-600 tracking-widest">Учебен План - {term} Срок</h3>
+                                        {term === '2' && (
+                                            <button onClick={copyTermPlan} className="px-6 py-2 bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase hover:bg-amber-600 transition-all">Копирай от 1 Срок</button>
+                                        )}
+                                        <select value={term} onChange={e => setTerm(e.target.value)} className="bg-indigo-50 text-indigo-700 font-black text-[10px] px-4 py-2 rounded-xl border-none outline-none">
+                                            <option value="1">I СРОК</option>
+                                            <option value="2">II СРОК</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div className="md:col-span-2">
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Паралелка</label>
+                                            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none border border-transparent focus:border-indigo-100">
+                                                <option value="">-- Избор --</option>
+                                                {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Преподавател</label>
+                                            <select value={curForm.tId} onChange={e => setCurForm({...curForm, tId: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none border border-transparent focus:border-indigo-100">
+                                                <option value="">-- Избор --</option>
+                                                {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Предмет</label>
+                                            <select value={curForm.sub} onChange={e => setCurForm({...curForm, sub: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none border border-transparent focus:border-indigo-100">
+                                                <option value="">-- Избор --</option>
+                                                {data.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="md:col-span-2 flex items-end gap-4">
+                                            <div className="flex-1 flex items-center gap-4 bg-slate-50 p-2 rounded-2xl">
+                                                <button onClick={() => setCurForm({...curForm, hours: Math.max(1, curForm.hours-1)})} className="w-12 h-12 bg-white rounded-xl shadow-sm text-xl font-black">-</button>
+                                                <span className="flex-1 text-center font-black text-lg">{curForm.hours} ч.</span>
+                                                <button onClick={() => setCurForm({...curForm, hours: curForm.hours+1})} className="w-12 h-12 bg-white rounded-xl shadow-sm text-xl font-black">+</button>
+                                            </div>
+                                            <button onClick={() => {
+                                                if(!selectedClass || !curForm.tId || !curForm.sub) return;
+                                                const newCur = JSON.parse(JSON.stringify(data.curriculum));
+                                                if(!newCur[term][selectedClass]) newCur[term][selectedClass] = [];
+                                                newCur[term][selectedClass].push({...curForm, id: Date.now()});
+                                                updateData({ curriculum: newCur });
+                                            }} className="bg-indigo-600 text-white px-10 h-16 rounded-2xl font-black text-[11px] uppercase shadow-lg">Добави</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {selectedClass && (
+                                    <div className="bg-white p-8 rounded-[3rem] shadow-xl">
+                                        <h4 className="text-[10px] font-black text-slate-400 uppercase mb-6 tracking-widest italic">Текущ учебен план</h4>
+                                        <div className="space-y-2">
+                                            {(data.curriculum[term][selectedClass] || []).map((item, idx) => (
+                                                <div key={item.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border-2 border-transparent hover:border-indigo-100 transition-all">
+                                                    <div className="flex gap-4 items-center">
+                                                        <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center font-black">{item.hours}</div>
+                                                        <div>
+                                                            <p className="font-black text-slate-800 text-xs uppercase">{item.sub}</p>
+                                                            <p className="text-[9px] font-bold text-slate-400 uppercase">{data.teachers.find(t => t.id === item.tId)?.name}</p>
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => {
+                                                        const newCur = JSON.parse(JSON.stringify(data.curriculum));
+                                                        newCur[term][selectedClass].splice(idx, 1);
+                                                        updateData({ curriculum: newCur });
+                                                    }} className="text-slate-300 hover:text-red-500 font-black text-xl px-2">×</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         )}
 
                         {activeTab === 'database' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="glass-card p-6 rounded-3xl">
-                                    <h3 className="font-black text-indigo-600 text-[10px] uppercase mb-4">Учители</h3>
-                                    <div className="flex gap-2 mb-4">
-                                        <input id="tIn" className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-bold outline-none" placeholder="Име..." />
-                                        <button onClick={() => { 
-                                            const val = document.getElementById('tIn').value;
-                                            if(val) { update({ teachers: [...data.teachers, {id: Date.now().toString(), name: val}] }); document.getElementById('tIn').value = ''; }
-                                        }} className="w-12 h-12 bg-indigo-600 text-white rounded-xl font-black">+</button>
-                                    </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
-                                        {data.teachers.map(t => (
-                                            <div key={t.id} className="p-3 bg-slate-50 rounded-xl flex justify-between items-center group">
-                                                <span className="text-xs font-bold">{t.name}</span>
-                                                <button onClick={() => update({ teachers: data.teachers.filter(x => x.id !== t.id) })} className="text-slate-300 hover:text-red-500 font-black opacity-0 group-hover:opacity-100">×</button>
-                                            </div>
-                                        ))}
-                                    </div>
+                            <div className="space-y-10">
+                                <div className="glass-card p-10 rounded-[3rem] shadow-xl">
+                                    <h3 className="font-black text-indigo-600 text-[11px] uppercase mb-8 tracking-widest border-b pb-4 flex items-center gap-3">
+                                        <span>📝 Допълнителни условия</span>
+                                        <span className="text-[8px] bg-indigo-100 px-2 py-1 rounded-lg">AI СВЪРЗАНО</span>
+                                    </h3>
+                                    <textarea 
+                                        value={data.customConditions} 
+                                        onChange={e => updateData({ customConditions: e.target.value })}
+                                        placeholder="Въведете специфични изисквания (напр. 'Учител Х да не е 1-ви час в понеделник')..."
+                                        className="w-full h-40 bg-slate-50 p-6 rounded-[2rem] text-sm font-bold text-slate-700 outline-none border-2 border-transparent focus:border-indigo-100 transition-all shadow-inner"
+                                    ></textarea>
                                 </div>
 
-                                <div className="glass-card p-6 rounded-3xl">
-                                    <h3 className="font-black text-indigo-600 text-[10px] uppercase mb-4">Паралелки</h3>
-                                    <div className="flex gap-2 mb-4">
-                                        <input id="cIn" className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-bold outline-none" placeholder="Име..." />
-                                        <button onClick={() => { 
-                                            const val = document.getElementById('cIn').value;
-                                            if(val) { update({ classes: [...data.classes, val] }); document.getElementById('cIn').value = ''; }
-                                        }} className="w-12 h-12 bg-indigo-600 text-white rounded-xl font-black">+</button>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="glass-card p-8 rounded-[3rem] shadow-lg">
+                                        <h3 className="font-black text-indigo-600 text-[10px] uppercase mb-6 tracking-widest border-b pb-4">Преподаватели</h3>
+                                        <div className="flex gap-2 mb-6">
+                                            <input id="tIn" className="flex-1 bg-slate-50 p-4 rounded-2xl text-xs font-bold outline-none" placeholder="Име..." />
+                                            <button onClick={() => {
+                                                const val = document.getElementById('tIn').value;
+                                                if(val) updateData({ teachers: [...data.teachers, {id: Date.now().toString(), name: val}] });
+                                                document.getElementById('tIn').value = '';
+                                            }} className="w-14 h-14 bg-indigo-600 text-white rounded-2xl font-black text-xl shadow-lg">+</button>
+                                        </div>
+                                        <div className="space-y-2 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                                            {data.teachers.map(t => (
+                                                <div key={t.id} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center group hover:bg-white hover:shadow-md transition-all">
+                                                    <span className="text-xs font-bold text-slate-700 uppercase tracking-tight">{t.name}</span>
+                                                    <button onClick={() => updateData({ teachers: data.teachers.filter(x => x.id !== t.id) })} className="text-slate-300 hover:text-red-500 font-black opacity-0 group-hover:opacity-100 transition-all">ИЗТРИЙ</button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
-                                        {data.classes.map((c, i) => (
-                                            <div key={i} className="p-3 bg-slate-50 rounded-xl flex justify-between items-center group">
-                                                <span className="text-xs font-bold">{c}</span>
-                                                <button onClick={() => update({ classes: data.classes.filter((_, idx) => idx !== i) })} className="text-slate-300 hover:text-red-500 font-black opacity-0 group-hover:opacity-100">×</button>
-                                            </div>
-                                        ))}
+
+                                    <div className="glass-card p-8 rounded-[3rem] shadow-lg">
+                                        <h3 className="font-black text-indigo-600 text-[10px] uppercase mb-6 tracking-widest border-b pb-4">Предмети</h3>
+                                        <div className="flex gap-2 mb-6">
+                                            <input id="sIn" className="flex-1 bg-slate-50 p-4 rounded-2xl text-xs font-bold outline-none" placeholder="Предмет..." />
+                                            <button onClick={() => {
+                                                const val = document.getElementById('sIn').value;
+                                                if(val) updateData({ subjects: [...data.subjects, val] });
+                                                document.getElementById('sIn').value = '';
+                                            }} className="w-14 h-14 bg-indigo-600 text-white rounded-2xl font-black text-xl shadow-lg">+</button>
+                                        </div>
+                                        <div className="space-y-2 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                                            {data.subjects.map((s, i) => (
+                                                <div key={i} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center group hover:bg-white hover:shadow-md transition-all">
+                                                    <span className="text-xs font-bold text-slate-700 uppercase tracking-tight">{s}</span>
+                                                    <button onClick={() => updateData({ subjects: data.subjects.filter((_, idx) => idx !== i) })} className="text-slate-300 hover:text-red-500 font-black opacity-0 group-hover:opacity-100 transition-all">ИЗТРИЙ</button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
