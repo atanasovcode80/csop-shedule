@@ -87,11 +87,7 @@
             
             // Основен стейт за данните
             const [data, setData] = useState({
-                classes: [],
-                teachers: [],
-                subjects: [],
-                conditions: [],
-                yearlyData: {} // Структура: { "2025/2026": { curriculum: {...}, schedules: {...} } }
+                yearlyData: {} // Всичко вече се съхранява вътре по години!
             });
 
             // Локални стейтове за форми
@@ -118,13 +114,19 @@
             const dragClassItem = useRef();
             const dragClassOverItem = useRef();
 
-            // Хелпери за извличане на данните
+            // ХЕЛПЕРИ ЗА ИЗВЛИЧАНЕ НА ДАННИТЕ ЗА ТЕКУЩАТА ГОДИНА
             const safeYearlyData = data.yearlyData || {};
-            const currentYearData = safeYearlyData[schoolYear] || { curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } };
+            const currentYearData = safeYearlyData[schoolYear] || {};
+            
+            // Динамично извличане на номенклатурите и разписанията (ако няма, връщаме празен масив/обект)
+            const currentClasses = currentYearData.classes || [];
+            const currentTeachers = currentYearData.teachers || [];
+            const currentSubjects = currentYearData.subjects || [];
+            const currentConditions = currentYearData.conditions || [];
             const currentCurriculum = currentYearData.curriculum || { '1': {}, '2': {} };
             const currentSchedules = currentYearData.schedules || { '1': {}, '2': {} };
 
-            // Изчистване на формата за редакция при смяна на клас или срок
+            // Изчистване на формата за редакция при смяна на клас, срок или година
             useEffect(() => {
                 setCurForm({ id: '', tId: '', sub: '', hours: 1 });
                 setEditingItemId(null);
@@ -142,13 +144,11 @@
 
                 const resetTimer = () => {
                     clearTimeout(inactivityTimeout);
-                    // 60 минути = 60 * 60 * 1000 милисекунди = 3 600 000 ms
-                    inactivityTimeout = setTimeout(logout, 3600000);
+                    inactivityTimeout = setTimeout(logout, 3600000); // 60 min
                 };
 
                 if (isLoggedIn) {
                     resetTimer();
-                    // Добавяме слушатели за събития, за да отчитаме активността
                     window.addEventListener('mousemove', resetTimer);
                     window.addEventListener('keydown', resetTimer);
                     window.addEventListener('click', resetTimer);
@@ -185,22 +185,30 @@
                                 window.FB_SDK.onSnapshot(docRef, (snap) => {
                                     if (snap.exists()) {
                                         const dbData = snap.data();
-                                        
                                         let updatedYearlyData = dbData.yearlyData || {};
-                                        if (dbData.curriculum && !updatedYearlyData['2025/2026']) {
+                                        
+                                        // МИГРАЦИЯ: Ако потребителят има стари данни в общи променливи, ги прехвърляме в 2025/2026
+                                        if (!updatedYearlyData['2025/2026']) {
                                             updatedYearlyData['2025/2026'] = {
-                                                curriculum: dbData.curriculum,
+                                                classes: dbData.classes || [],
+                                                teachers: dbData.teachers || [],
+                                                subjects: dbData.subjects || [],
+                                                conditions: dbData.conditions || [],
+                                                curriculum: dbData.curriculum || { '1': {}, '2': {} },
                                                 schedules: dbData.schedules || { '1': {}, '2': {} }
                                             };
+                                        } else {
+                                            // Гарантиране, че ако липсват масиви, ще се създадат
+                                            if (!updatedYearlyData['2025/2026'].classes) updatedYearlyData['2025/2026'].classes = dbData.classes || [];
+                                            if (!updatedYearlyData['2025/2026'].teachers) updatedYearlyData['2025/2026'].teachers = dbData.teachers || [];
+                                            if (!updatedYearlyData['2025/2026'].subjects) updatedYearlyData['2025/2026'].subjects = dbData.subjects || [];
+                                            if (!updatedYearlyData['2025/2026'].conditions) updatedYearlyData['2025/2026'].conditions = dbData.conditions || [];
                                         }
 
-                                        setData(prev => ({
-                                            classes: dbData.classes || [],
-                                            teachers: dbData.teachers || [],
-                                            subjects: dbData.subjects || [],
-                                            conditions: dbData.conditions || [],
-                                            yearlyData: updatedYearlyData
-                                        }));
+                                        setData({ yearlyData: updatedYearlyData });
+                                    } else {
+                                        // Ако няма документ
+                                        setData({ yearlyData: { '2025/2026': { classes: [], teachers: [], subjects: [], conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } } } });
                                     }
                                     setReady(true);
                                 }, (error) => {
@@ -237,10 +245,11 @@
                 saveData(newData);
             };
 
+            // ФУНКЦИЯ ЗА ЗАПИС В КОНКРЕТНА ГОДИНА
             const updateYearlyDataField = (type, newYearData) => {
                 const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
                 if (!newYearlyData[schoolYear]) {
-                    newYearlyData[schoolYear] = { curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } };
+                    newYearlyData[schoolYear] = { classes: [], teachers: [], subjects: [], conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } };
                 }
                 newYearlyData[schoolYear][type] = newYearData;
                 updateDataField('yearlyData', newYearlyData);
@@ -267,6 +276,26 @@
                 setPasswordInput('');
             };
 
+            // Обработка на превключване на Учебна Година
+            const handleSchoolYearChange = (e) => {
+                const newYear = e.target.value;
+                if (!data.yearlyData || !data.yearlyData[newYear]) {
+                    // Ако тази година се отваря за първи път, КОПИРАМЕ номенклатурите от предишната, за да е по-лесно
+                    const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
+                    newYearlyData[newYear] = {
+                        classes: [...currentClasses],
+                        teachers: [...currentTeachers],
+                        subjects: [...currentSubjects],
+                        conditions: [...currentConditions],
+                        curriculum: { '1': {}, '2': {} },
+                        schedules: { '1': {}, '2': {} }
+                    };
+                    updateDataField('yearlyData', newYearlyData);
+                }
+                setSchoolYear(newYear);
+                setSelectedClass(''); // Изчистваме избрания клас
+            };
+
             // Функции за Drag and Drop на класовете
             const dragClassStart = (e, position) => {
                 dragClassItem.current = position;
@@ -280,7 +309,7 @@
                 e.preventDefault();
                 if (dragClassItem.current === null || dragClassOverItem.current === null) return;
                 
-                const copyListItems = [...data.classes];
+                const copyListItems = [...currentClasses];
                 const dragItemContent = copyListItems[dragClassItem.current];
                 copyListItems.splice(dragClassItem.current, 1);
                 copyListItems.splice(dragClassOverItem.current, 0, dragItemContent);
@@ -288,7 +317,7 @@
                 dragClassItem.current = null;
                 dragClassOverItem.current = null;
                 
-                updateDataField('classes', copyListItems);
+                updateYearlyDataField('classes', copyListItems);
             };
 
             const dragClassOver = (e) => {
@@ -303,11 +332,10 @@
                 const newSchedulesAll = JSON.parse(JSON.stringify(currentSchedules));
                 newSchedulesAll[currentTerm] = {}; 
 
-                // Взимаме точната подредба от списъка с класове, който потребителят е наредил
-                const sortedClasses = [...data.classes];
+                const sortedClasses = [...currentClasses]; // Точно в реда от База Данни
 
                 const isTeacherBusy = (day, hour, tId) => {
-                    const isBlocked = data.conditions.some(c => {
+                    const isBlocked = currentConditions.some(c => {
                         if (c.tId === tId && parseInt(c.day) === day) {
                             if (c.hour === 'all') return true;
                             if (parseInt(c.hour) === hour) return true;
@@ -401,10 +429,8 @@
                 if (!newSchedulesAll[term][manualEditModal.cls][manualEditModal.day]) newSchedulesAll[term][manualEditModal.cls][manualEditModal.day] = {};
 
                 if (!manualEditModal.sub || !manualEditModal.tId) {
-                    // Изтриване на часа
                     delete newSchedulesAll[term][manualEditModal.cls][manualEditModal.day][manualEditModal.hour];
                 } else {
-                    // Запазване на новия час
                     newSchedulesAll[term][manualEditModal.cls][manualEditModal.day][manualEditModal.hour] = {
                         sub: manualEditModal.sub,
                         tId: manualEditModal.tId
@@ -420,7 +446,7 @@
             const exportExcel = () => {
                 if (!selectedClass) return showToast("Изберете клас за експорт!");
                 
-                const classesToExport = selectedClass === 'all' ? data.classes : [selectedClass];
+                const classesToExport = selectedClass === 'all' ? currentClasses : [selectedClass];
                 const workbook = XLSX.utils.book_new();
                 let hasData = false;
 
@@ -435,7 +461,7 @@
                         for(let d=0; d<5; d++) {
                             const cell = sched[d]?.[h];
                             if (cell) {
-                                const teacher = data.teachers.find(t => t.id === cell.tId)?.name || '';
+                                const teacher = currentTeachers.find(t => t.id === cell.tId)?.name || '';
                                 row[DAYS_BG[d]] = `${cell.sub} (${teacher})`;
                             } else {
                                 row[DAYS_BG[d]] = "-";
@@ -454,7 +480,7 @@
             const exportWord = () => {
                 if (!selectedClass) return;
                 
-                const classesToExport = selectedClass === 'all' ? data.classes : [selectedClass];
+                const classesToExport = selectedClass === 'all' ? currentClasses : [selectedClass];
                 let htmlContent = '';
 
                 classesToExport.forEach((cls, index) => {
@@ -531,7 +557,7 @@
                 );
             }
 
-            const renderedClasses = selectedClass === 'all' ? data.classes : (selectedClass ? [selectedClass] : []);
+            const renderedClasses = selectedClass === 'all' ? currentClasses : (selectedClass ? [selectedClass] : []);
 
             return (
                 <div className="min-h-screen flex flex-col">
@@ -555,7 +581,7 @@
                                             <div className="flex items-center gap-1.5 md:gap-2 mt-0.5 md:mt-1 flex-wrap">
                                                 <select 
                                                     value={schoolYear} 
-                                                    onChange={e => setSchoolYear(e.target.value)} 
+                                                    onChange={handleSchoolYearChange} 
                                                     className="bg-slate-800 text-indigo-300 font-bold text-[9px] md:text-xs uppercase tracking-widest rounded-md px-1.5 py-0.5 outline-none border border-slate-700 cursor-pointer"
                                                 >
                                                     {AVAILABLE_YEARS.map(y => <option key={y} value={y}>Учебна {y}</option>)}
@@ -613,7 +639,7 @@
                                                 <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
                                                     <option value="">-- Избери --</option>
                                                     <option value="all">Всички класове</option>
-                                                    {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
+                                                    {currentClasses.map(c => <option key={c} value={c}>{c}</option>)}
                                                 </select>
                                             </div>
                                         </div>
@@ -657,7 +683,7 @@
                                                                         <td className="p-4 text-center font-black text-slate-300 text-2xl" style={{borderBottom: "1px solid #f1f5f9"}}>{hour}</td>
                                                                         {[0,1,2,3,4].map(dayIdx => {
                                                                             const cell = currentSchedules[term]?.[cls]?.[dayIdx]?.[hour];
-                                                                            const teacher = cell ? data.teachers.find(t => t.id === cell.tId) : null;
+                                                                            const teacher = cell ? currentTeachers.find(t => t.id === cell.tId) : null;
                                                                             return (
                                                                                 <td 
                                                                                     key={dayIdx} 
@@ -731,21 +757,21 @@
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Паралелка</label>
                                             <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} disabled={editingItemId !== null} className={`w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none ${editingItemId ? 'opacity-50 cursor-not-allowed' : 'focus:border-indigo-500'}`}>
                                                 <option value="">-- Избери --</option>
-                                                {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
+                                                {currentClasses.map(c => <option key={c} value={c}>{c}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Предмет</label>
                                             <select value={curForm.sub} onChange={e => setCurForm({...curForm, sub: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
                                                 <option value="">-- Избери --</option>
-                                                {data.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                                {currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател</label>
                                             <select value={curForm.tId} onChange={e => setCurForm({...curForm, tId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
                                                 <option value="">-- Избери --</option>
-                                                {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                                {currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
@@ -806,7 +832,7 @@
                                         ) : (
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                 {currentCurriculum[term][selectedClass].map((item, idx) => {
-                                                    const teacher = data.teachers.find(t => t.id === item.tId);
+                                                    const teacher = currentTeachers.find(t => t.id === item.tId);
                                                     const isBeingEdited = editingItemId === item.id;
                                                     return (
                                                         <div key={item.id} className={`flex justify-between items-center p-3 rounded-xl border ${isBeingEdited ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'} transition-all`}>
@@ -868,14 +894,14 @@
                                     <div className="flex gap-2 mb-4">
                                         <input value={newClass} onChange={e=>setNewClass(e.target.value)} placeholder="Напр. V" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
                                         <button onClick={() => {
-                                            if(newClass && !data.classes.includes(newClass)) {
-                                                updateDataField('classes', [...data.classes, newClass]);
+                                            if(newClass && !currentClasses.includes(newClass)) {
+                                                updateYearlyDataField('classes', [...currentClasses, newClass]);
                                                 setNewClass('');
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
                                     <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                                        {data.classes.map((c, index) => (
+                                        {currentClasses.map((c, index) => (
                                             <div 
                                                 key={c} 
                                                 draggable
@@ -890,7 +916,7 @@
                                                     <span className="text-slate-400 cursor-grab active:cursor-grabbing text-lg">⣿</span>
                                                     <span className="font-bold text-slate-700">{c}</span>
                                                 </div>
-                                                <button onClick={() => updateDataField('classes', data.classes.filter(x => x !== c))} className="text-red-400 hover:text-red-600 text-[10px] font-black uppercase bg-white px-2 py-1 rounded shadow-sm">Изтрий</button>
+                                                <button onClick={() => updateYearlyDataField('classes', currentClasses.filter(x => x !== c))} className="text-red-400 hover:text-red-600 text-[10px] font-black uppercase bg-white px-2 py-1 rounded shadow-sm">Изтрий</button>
                                             </div>
                                         ))}
                                     </div>
@@ -905,16 +931,16 @@
                                         <input value={newTeacher} onChange={e=>setNewTeacher(e.target.value)} placeholder="Име Фамилия" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
                                         <button onClick={() => {
                                             if(newTeacher) {
-                                                updateDataField('teachers', [...data.teachers, { id: Date.now().toString(), name: newTeacher }]);
+                                                updateYearlyDataField('teachers', [...currentTeachers, { id: Date.now().toString(), name: newTeacher }]);
                                                 setNewTeacher('');
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
                                     <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                                        {data.teachers.map(t => (
+                                        {currentTeachers.map(t => (
                                             <div key={t.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                                                 <span className="font-bold text-slate-700 text-sm">{t.name}</span>
-                                                <button onClick={() => updateDataField('teachers', data.teachers.filter(x => x.id !== t.id))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
+                                                <button onClick={() => updateYearlyDataField('teachers', currentTeachers.filter(x => x.id !== t.id))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
                                             </div>
                                         ))}
                                     </div>
@@ -928,17 +954,17 @@
                                     <div className="flex gap-2 mb-4">
                                         <input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="Напр. БЕЛ" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
                                         <button onClick={() => {
-                                            if(newSubject && !data.subjects.includes(newSubject)) {
-                                                updateDataField('subjects', [...data.subjects, newSubject]);
+                                            if(newSubject && !currentSubjects.includes(newSubject)) {
+                                                updateYearlyDataField('subjects', [...currentSubjects, newSubject]);
                                                 setNewSubject('');
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
                                     <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                                        {data.subjects.map(s => (
+                                        {currentSubjects.map(s => (
                                             <div key={s} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                                                 <span className="font-bold text-slate-700 text-sm">{s}</span>
-                                                <button onClick={() => updateDataField('subjects', data.subjects.filter(x => x !== s))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
+                                                <button onClick={() => updateYearlyDataField('subjects', currentSubjects.filter(x => x !== s))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
                                             </div>
                                         ))}
                                     </div>
@@ -963,7 +989,7 @@
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател</label>
                                             <select value={condForm.tId} onChange={e => setCondForm({...condForm, tId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
                                                 <option value="">-- Изберете учител --</option>
-                                                {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                                {currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
@@ -986,11 +1012,11 @@
                                             if(!condForm.tId) return showToast("Изберете преподавател!");
                                             const newCond = { id: Date.now().toString(), tId: condForm.tId, day: condForm.day, hour: condForm.hour };
                                             
-                                            if(data.conditions.some(c => c.tId === newCond.tId && c.day === newCond.day && c.hour === newCond.hour)) {
+                                            if(currentConditions.some(c => c.tId === newCond.tId && c.day === newCond.day && c.hour === newCond.hour)) {
                                                 return showToast("Това условие вече е добавено!");
                                             }
 
-                                            updateDataField('conditions', [...data.conditions, newCond]);
+                                            updateYearlyDataField('conditions', [...currentConditions, newCond]);
                                             showToast("Условието е запазено!");
                                         }}
                                         className="w-full bg-orange-500 text-white p-4 rounded-xl font-black uppercase text-sm hover:bg-orange-600 transition-colors shadow-sm">
@@ -1001,12 +1027,12 @@
                                 {/* Списък с активни условия */}
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                                     <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Активни Условия</h3>
-                                    {(!data.conditions || data.conditions.length === 0) ? (
+                                    {(!currentConditions || currentConditions.length === 0) ? (
                                         <p className="text-slate-400 font-medium text-center py-8">Няма въведени ограничения за учителите.</p>
                                     ) : (
                                         <div className="space-y-3">
-                                            {data.conditions.map(cond => {
-                                                const teacher = data.teachers.find(t => t.id === cond.tId);
+                                            {currentConditions.map(cond => {
+                                                const teacher = currentTeachers.find(t => t.id === cond.tId);
                                                 return (
                                                     <div key={cond.id} className="flex justify-between items-center bg-orange-50/50 border border-orange-100 p-4 rounded-xl">
                                                         <div className="flex items-center gap-3">
@@ -1019,7 +1045,7 @@
                                                             </div>
                                                         </div>
                                                         <button 
-                                                            onClick={() => updateDataField('conditions', data.conditions.filter(c => c.id !== cond.id))}
+                                                            onClick={() => updateYearlyDataField('conditions', currentConditions.filter(c => c.id !== cond.id))}
                                                             className="text-slate-400 hover:text-red-500 font-bold uppercase text-xs transition-colors">
                                                             Премахни
                                                         </button>
@@ -1053,7 +1079,7 @@
                                             className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500"
                                         >
                                             <option value="">-- Изчисти (Свободен час) --</option>
-                                            {data.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                            {currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
                                         </select>
                                     </div>
                                     <div>
@@ -1064,7 +1090,7 @@
                                             className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500"
                                         >
                                             <option value="">-- Изчисти (Свободен час) --</option>
-                                            {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                            {currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                         </select>
                                     </div>
                                 </div>
