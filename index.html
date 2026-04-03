@@ -26,6 +26,7 @@
             .no-print { display: none !important; }
             .print-only { display: block !important; }
             .print-container { width: 100%; margin: 0; padding: 0; box-shadow: none; border: none; }
+            .print-page-break { page-break-before: always; }
             @page { margin: 1cm; size: landscape; }
         }
         
@@ -52,7 +53,7 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // Firebase Configuration (Вашите ключове)
+        // Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
             authDomain: "generator-razpisanie.firebaseapp.com",
@@ -63,26 +64,28 @@
             appId: "1:756529315524:web:faa5e91bdd62c2e05ed391"
         };
         const APP_ID = "csop-leda-mileva-prod";
+        const DAYS_BG = ['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'];
 
         function App() {
             const [user, setUser] = useState(null);
             const [ready, setReady] = useState(false);
-            const [activeTab, setActiveTab] = useState('curriculum'); // Default tab
-            const [term, setTerm] = useState('1'); // 1 or 2
+            const [activeTab, setActiveTab] = useState('schedule'); 
+            const [term, setTerm] = useState('1'); 
             
             // Основен стейт за данните
             const [data, setData] = useState({
                 classes: [],
                 teachers: [],
                 subjects: [],
-                curriculum: { '1': {}, '2': {} }, // structure: { term: { classId: [ {id, sub, tId, hours} ] } }
-                schedules: { '1': {}, '2': {} },  // structure: { term: { classId: { day: { hour: { sub, tId } } } } }
-                customConditions: ""
+                curriculum: { '1': {}, '2': {} }, 
+                schedules: { '1': {}, '2': {} },  
+                conditions: [] 
             });
 
             // Локални стейтове за форми
             const [selectedClass, setSelectedClass] = useState('');
             const [curForm, setCurForm] = useState({ tId: '', sub: '', hours: 1 });
+            const [condForm, setCondForm] = useState({ tId: '', day: '0', hour: '1' });
             const [newTeacher, setNewTeacher] = useState('');
             const [newSubject, setNewSubject] = useState('');
             const [newClass, setNewClass] = useState('');
@@ -100,17 +103,14 @@
                         const auth = window.FB_SDK.getAuth(app);
                         const db = window.FB_SDK.getFirestore(app);
                         
-                        // Вход в системата (анонимен за лесен достъп)
                         await window.FB_SDK.signInAnonymously(auth);
                         
                         window.FB_SDK.onAuthStateChanged(auth, (u) => {
                             if (u) {
                                 setUser(u);
-                                // Слушане за промени в реално време (Real-time sync)
                                 const docRef = window.FB_SDK.doc(db, 'artifacts', APP_ID, 'public', 'data', 'school', 'master');
                                 window.FB_SDK.onSnapshot(docRef, (snap) => {
                                     if (snap.exists()) {
-                                        // Merge със съществуващия стейт, за да не гърми ако липсва нещо
                                         const dbData = snap.data();
                                         setData(prev => ({
                                             classes: dbData.classes || [],
@@ -118,7 +118,7 @@
                                             subjects: dbData.subjects || [],
                                             curriculum: dbData.curriculum || { '1': {}, '2': {} },
                                             schedules: dbData.schedules || { '1': {}, '2': {} },
-                                            customConditions: dbData.customConditions || ""
+                                            conditions: dbData.conditions || []
                                         }));
                                     }
                                     setReady(true);
@@ -136,7 +136,7 @@
                 initFirebase();
             }, []);
 
-            // Функция за запазване на данните във Firebase
+            // Запазване
             const saveData = async (updatedData) => {
                 if (!user || !window.FB_SDK) return;
                 try {
@@ -156,7 +156,6 @@
                 saveData(newData);
             };
 
-            // Helpers
             const showToast = (msg) => {
                 setToastMessage(msg);
                 setTimeout(() => setToastMessage(''), 3000);
@@ -168,18 +167,25 @@
                 
                 const currentTerm = term;
                 const newSchedulesAll = JSON.parse(JSON.stringify(data.schedules));
-                newSchedulesAll[currentTerm] = {}; // Зануляваме разписанието за избрания срок
+                newSchedulesAll[currentTerm] = {}; 
 
-                // Подреждане на класовете по приоритет (по-малките са с предимство)
-                // Пример: ПГ, I, II, III...
                 const sortedClasses = [...data.classes].sort((a, b) => {
                     const isSmallA = /ПГ|I$|I |1|2|3/.test(a) ? -1 : 1;
                     const isSmallB = /ПГ|I$|I |1|2|3/.test(b) ? -1 : 1;
                     return isSmallA - isSmallB;
                 });
 
-                // Функция за проверка дали учителят е зает в даден ден и час
                 const isTeacherBusy = (day, hour, tId) => {
+                    // Проверка на условия (включително "all" за целия ден)
+                    const isBlocked = data.conditions.some(c => {
+                        if (c.tId === tId && parseInt(c.day) === day) {
+                            if (c.hour === 'all') return true;
+                            if (parseInt(c.hour) === hour) return true;
+                        }
+                        return false;
+                    });
+                    if (isBlocked) return true;
+
                     for (let cls in newSchedulesAll[currentTerm]) {
                         if (newSchedulesAll[currentTerm][cls][day] && 
                             newSchedulesAll[currentTerm][cls][day][hour] && 
@@ -190,49 +196,49 @@
                     return false;
                 };
 
-                // Разпределяне клас по клас
+                const hasSubjectToday = (day, sub, clsSched) => {
+                    for(let h=1; h<=7; h++) {
+                        if(clsSched[day] && clsSched[day][h] && clsSched[day][h].sub === sub) return true;
+                    }
+                    return false;
+                };
+
                 sortedClasses.forEach(cls => {
                     newSchedulesAll[currentTerm][cls] = { 0:{}, 1:{}, 2:{}, 3:{}, 4:{} };
                     const plan = data.curriculum[currentTerm][cls] || [];
                     
-                    let tasks = []; // Всички единични часове за класа
+                    let tasks = [];
                     plan.forEach(item => {
                         for(let i=0; i<item.hours; i++) {
                             tasks.push({ sub: item.sub, tId: item.tId });
                         }
                     });
 
-                    // Разбъркваме леко задачите за по-равномерно разпределение
                     tasks.sort(() => Math.random() - 0.5);
 
                     tasks.forEach(task => {
                         let placed = false;
-                        
-                        // ПРИОРИТЕТ 1: Опит за поставяне от 1-ви до 5-ти час
-                        for(let h=1; h<=5; h++) {
-                            for(let d=0; d<5; d++) { // Понеделник до Петък
-                                if (!newSchedulesAll[currentTerm][cls][d][h] && !isTeacherBusy(d, h, task.tId)) {
-                                    newSchedulesAll[currentTerm][cls][d][h] = task;
-                                    placed = true;
-                                    break;
-                                }
-                            }
-                            if(placed) break;
-                        }
+                        let clsSched = newSchedulesAll[currentTerm][cls];
 
-                        // ПРИОРИТЕТ 2: Ако няма място, слагаме 6-ти или 7-ми час
-                        if (!placed) {
-                            for(let h=6; h<=7; h++) {
-                                for(let d=0; d<5; d++) {
-                                    if (!newSchedulesAll[currentTerm][cls][d][h] && !isTeacherBusy(d, h, task.tId)) {
-                                        newSchedulesAll[currentTerm][cls][d][h] = task;
-                                        placed = true;
-                                        break;
+                        const tryPlace = (startH, endH, allowSameSubject) => {
+                            for(let h=startH; h<=endH; h++) {
+                                let randomDays = [0,1,2,3,4].sort(() => Math.random() - 0.5); 
+                                for(let d of randomDays) {
+                                    if (!clsSched[d][h] && !isTeacherBusy(d, h, task.tId)) {
+                                        if (allowSameSubject || !hasSubjectToday(d, task.sub, clsSched)) {
+                                            clsSched[d][h] = task;
+                                            return true;
+                                        }
                                     }
                                 }
-                                if(placed) break;
                             }
-                        }
+                            return false;
+                        };
+
+                        placed = tryPlace(1, 5, false);
+                        if (!placed) placed = tryPlace(6, 7, false);
+                        if (!placed) placed = tryPlace(1, 5, true);
+                        if (!placed) placed = tryPlace(6, 7, true);
 
                         if (!placed) {
                             console.log(`Неуспешно разпределяне: ${task.sub} за ${cls}`);
@@ -241,50 +247,74 @@
                 });
 
                 updateDataField('schedules', newSchedulesAll);
-                showToast("Разписанието е генерирано успешно!");
+                showToast("Разписанието е генерирано и оптимизирано!");
             };
 
             // --- 3. ЕКСПОРТ ФУНКЦИИ ---
             const exportExcel = () => {
-                if (!selectedClass || !data.schedules[term][selectedClass]) return showToast("Няма данни за експорт!");
+                if (!selectedClass) return showToast("Изберете клас за експорт!");
                 
-                const sched = data.schedules[term][selectedClass];
-                const days = ['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'];
-                const exportData = [];
-
-                for(let h=1; h<=7; h++) {
-                    let row = { "Час": `${h}` };
-                    for(let d=0; d<5; d++) {
-                        const cell = sched[d]?.[h];
-                        if (cell) {
-                            const teacher = data.teachers.find(t => t.id === cell.tId)?.name || '';
-                            row[days[d]] = `${cell.sub} (${teacher})`;
-                        } else {
-                            row[days[d]] = "-";
-                        }
-                    }
-                    exportData.push(row);
-                }
-
-                const worksheet = XLSX.utils.json_to_sheet(exportData);
+                const classesToExport = selectedClass === 'all' ? data.classes : [selectedClass];
                 const workbook = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(workbook, worksheet, "Разписание");
-                XLSX.writeFile(workbook, `Razpisanie_${selectedClass}_Srok${term}.xlsx`);
+                let hasData = false;
+
+                classesToExport.forEach(cls => {
+                    const sched = data.schedules[term]?.[cls];
+                    if (!sched) return;
+                    hasData = true;
+
+                    const exportData = [];
+                    for(let h=1; h<=7; h++) {
+                        let row = { "Час": `${h}` };
+                        for(let d=0; d<5; d++) {
+                            const cell = sched[d]?.[h];
+                            if (cell) {
+                                const teacher = data.teachers.find(t => t.id === cell.tId)?.name || '';
+                                row[DAYS_BG[d]] = `${cell.sub} (${teacher})`;
+                            } else {
+                                row[DAYS_BG[d]] = "-";
+                            }
+                        }
+                        exportData.push(row);
+                    }
+                    const worksheet = XLSX.utils.json_to_sheet(exportData);
+                    // Името на sheet-а е ограничено до 31 символа
+                    XLSX.utils.book_append_sheet(workbook, worksheet, cls.substring(0, 31));
+                });
+
+                if(!hasData) return showToast("Няма генерирано разписание за експорт!");
+                XLSX.writeFile(workbook, `Razpisanie_${selectedClass === 'all' ? 'Vsichki_Klasove' : selectedClass}_Srok${term}.xlsx`);
             };
 
             const exportWord = () => {
-                const headerHtml = `
-                    <h2 style="text-align:center; font-family: sans-serif;">ЦСОП "Леда Милева"</h2>
-                    <h3 style="text-align:center; font-family: sans-serif;">Седмично разписание - ${selectedClass} (Срок ${term})</h3>
-                `;
-                const tableHtml = document.getElementById('schedule-table-print').outerHTML;
-                const fullHtml = `<html><body>${headerHtml}${tableHtml}</body></html>`;
+                if (!selectedClass) return;
+                
+                const classesToExport = selectedClass === 'all' ? data.classes : [selectedClass];
+                let htmlContent = '';
+
+                classesToExport.forEach((cls, index) => {
+                    // Взимаме HTML таблицата по ID за всеки клас
+                    const tableElement = document.getElementById(`schedule-table-${cls}`);
+                    if (!tableElement) return;
+
+                    const tableHtml = tableElement.outerHTML;
+                    htmlContent += `
+                        <h2 style="text-align:center; font-family: sans-serif;">ЦСОП "Леда Милева"</h2>
+                        <h3 style="text-align:center; font-family: sans-serif;">Седмично разписание - ${cls} (Срок ${term})</h3>
+                        ${tableHtml}
+                        ${index < classesToExport.length - 1 ? '<br clear="all" style="page-break-before:always" />' : ''}
+                    `;
+                });
+
+                if(!htmlContent) return showToast("Няма таблици за експорт!");
+
+                const fullHtml = `<html><head><meta charset="UTF-8"></head><body>${htmlContent}</body></html>`;
                 
                 const blob = new Blob(['\ufeff', fullHtml], { type: 'application/msword' });
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = `Razpisanie_${selectedClass}.doc`;
+                link.download = `Razpisanie_${selectedClass === 'all' ? 'Vsichki' : selectedClass}.doc`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -300,9 +330,11 @@
                 );
             }
 
+            // Класове, които ще бъдат рендерирани в меню Разписание
+            const renderedClasses = selectedClass === 'all' ? data.classes : (selectedClass ? [selectedClass] : []);
+
             return (
                 <div className="min-h-screen">
-                    {/* Тоуст съобщения */}
                     {toastMessage && (
                         <div className="fixed top-5 right-5 bg-indigo-600 text-white px-6 py-3 rounded-lg shadow-2xl z-50 font-bold transition-all">
                             {toastMessage}
@@ -320,17 +352,113 @@
                                 </div>
                             </div>
 
+                            {/* МЕНЮ - База Данни е преместено преди Условия */}
                             <div className="flex bg-slate-800 p-1.5 rounded-xl gap-1 overflow-x-auto max-w-full">
-                                <button onClick={() => setActiveTab('curriculum')} className={`px-5 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'curriculum' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Учебен План</button>
                                 <button onClick={() => setActiveTab('schedule')} className={`px-5 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'schedule' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Разписание</button>
+                                <button onClick={() => setActiveTab('curriculum')} className={`px-5 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'curriculum' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Учебен План</button>
                                 <button onClick={() => setActiveTab('database')} className={`px-5 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'database' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>База Данни</button>
+                                <button onClick={() => setActiveTab('conditions')} className={`px-5 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'conditions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Условия</button>
                             </div>
                         </div>
                     </header>
 
                     <main className="max-w-7xl mx-auto p-4 md:p-6 pb-20">
                         
-                        {/* ТАБ: УЧЕБЕН ПЛАН */}
+                        {/* ТАБ 1: РАЗПИСАНИЕ */}
+                        {activeTab === 'schedule' && (
+                            <div className="space-y-6">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 no-print">
+                                    <div className="flex flex-col md:flex-row gap-4 justify-between items-end">
+                                        <div className="flex gap-4 w-full md:w-auto">
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Срок</label>
+                                                <select value={term} onChange={e => setTerm(e.target.value)} className="bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                                    <option value="1">I СРОК</option>
+                                                    <option value="2">II СРОК</option>
+                                                </select>
+                                            </div>
+                                            <div className="flex-1 min-w-[150px]">
+                                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преглед на Клас</label>
+                                                <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                                    <option value="">-- Избери --</option>
+                                                    {/* Добавена опция Всички класове */}
+                                                    <option value="all">Всички класове</option>
+                                                    {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
+                                            <button onClick={generateSchedule} className="flex-1 md:flex-none bg-indigo-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700">Генерирай Всички</button>
+                                            {selectedClass && (
+                                                <>
+                                                    <button onClick={exportExcel} className="bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700" title="Експорт към Excel">XLS</button>
+                                                    <button onClick={exportWord} className="bg-blue-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-blue-700" title="Експорт към Word">DOC</button>
+                                                    <button onClick={() => window.print()} className="bg-slate-800 text-white px-4 py-3 rounded-xl font-bold hover:bg-slate-900" title="Печат / PDF">PDF</button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Рендериране на 1 или Всички класове */}
+                                {renderedClasses.length > 0 ? (
+                                    <div id="schedule-print-wrapper" className="space-y-10">
+                                        {renderedClasses.map((cls, idx) => (
+                                            <div key={cls} className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden print-container ${idx > 0 ? 'print-page-break' : ''}`}>
+                                                <div className="p-6 md:p-8 text-center border-b border-slate-100">
+                                                    <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight">{cls} клас</h2>
+                                                    <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest mt-2">Седмично Разписание • {term} Срок</p>
+                                                </div>
+                                                <div className="overflow-x-auto p-4 md:p-6">
+                                                    <table className="w-full min-w-[800px] border-collapse" id={`schedule-table-${cls}`}>
+                                                        <thead>
+                                                            <tr>
+                                                                <th className="p-3 border-b-2 border-slate-200 text-xs font-black text-slate-400 uppercase w-16" style={{borderBottom: "2px solid #e2e8f0"}}>Час</th>
+                                                                {DAYS_BG.map(d => (
+                                                                    <th key={d} className="p-3 border-b-2 border-slate-200 text-sm font-black text-slate-700 uppercase w-1/5" style={{borderBottom: "2px solid #e2e8f0"}}>{d}</th>
+                                                                ))}
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {[1,2,3,4,5,6,7].map(hour => {
+                                                                return (
+                                                                    <tr key={hour} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                                                                        <td className="p-4 text-center font-black text-slate-300 text-2xl" style={{borderBottom: "1px solid #f1f5f9"}}>{hour}</td>
+                                                                        {[0,1,2,3,4].map(dayIdx => {
+                                                                            const cell = data.schedules[term]?.[cls]?.[dayIdx]?.[hour];
+                                                                            const teacher = cell ? data.teachers.find(t => t.id === cell.tId) : null;
+                                                                            return (
+                                                                                <td key={dayIdx} className="p-2 align-top" style={{borderBottom: "1px solid #f1f5f9"}}>
+                                                                                    {cell ? (
+                                                                                        <div className={`p-3 rounded-xl border ${hour > 5 ? 'bg-orange-50 border-orange-200' : 'bg-white border-indigo-100 shadow-sm'} h-full flex flex-col justify-center`} style={{border: "1px solid #e0e7ff", borderRadius: "8px", padding: "8px"}}>
+                                                                                            <p className="text-slate-800 font-bold text-xs uppercase leading-tight" style={{margin: 0, fontWeight: "bold"}}>{cell.sub}</p>
+                                                                                            <p className="text-indigo-500 font-medium text-[10px] mt-1" style={{margin: "4px 0 0 0", fontSize: "10px", color: "#6366f1"}}>{teacher?.name}</p>
+                                                                                        </div>
+                                                                                    ) : (
+                                                                                        <div className="h-full min-h-[60px] rounded-xl border border-dashed border-slate-200 bg-slate-50/50"></div>
+                                                                                    )}
+                                                                                </td>
+                                                                            )
+                                                                        })}
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400 font-medium">
+                                        Изберете паралелка за преглед на разписанието
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* ТАБ 2: УЧЕБЕН ПЛАН */}
                         {activeTab === 'curriculum' && (
                             <div className="max-w-5xl mx-auto space-y-6">
                                 <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -410,7 +538,7 @@
                                 </div>
 
                                 {/* Списък с текущия план */}
-                                {selectedClass && (
+                                {selectedClass && selectedClass !== 'all' && (
                                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                                         <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Текущ план: {selectedClass} ({term} Срок)</h3>
                                         {(!data.curriculum[term][selectedClass] || data.curriculum[term][selectedClass].length === 0) ? (
@@ -447,98 +575,7 @@
                             </div>
                         )}
 
-                        {/* ТАБ: РАЗПИСАНИЕ */}
-                        {activeTab === 'schedule' && (
-                            <div className="space-y-6">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 no-print">
-                                    <div className="flex flex-col md:flex-row gap-4 justify-between items-end">
-                                        <div className="flex gap-4 w-full md:w-auto">
-                                            <div>
-                                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Срок</label>
-                                                <select value={term} onChange={e => setTerm(e.target.value)} className="bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                    <option value="1">I СРОК</option>
-                                                    <option value="2">II СРОК</option>
-                                                </select>
-                                            </div>
-                                            <div className="flex-1 min-w-[150px]">
-                                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преглед на Клас</label>
-                                                <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                    <option value="">-- Избери --</option>
-                                                    {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
-                                                </select>
-                                            </div>
-                                        </div>
-                                        
-                                        <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
-                                            <button onClick={generateSchedule} className="flex-1 md:flex-none bg-indigo-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700">Генерирай Всички</button>
-                                            {selectedClass && (
-                                                <>
-                                                    <button onClick={exportExcel} className="bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700" title="Експорт към Excel">XLS</button>
-                                                    <button onClick={exportWord} className="bg-blue-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-blue-700" title="Експорт към Word">DOC</button>
-                                                    <button onClick={() => window.print()} className="bg-slate-800 text-white px-4 py-3 rounded-xl font-bold hover:bg-slate-900" title="Печат / PDF">PDF</button>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {selectedClass ? (
-                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden print-container">
-                                        <div className="p-6 md:p-8 text-center border-b border-slate-100">
-                                            <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight">{selectedClass} клас</h2>
-                                            <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest mt-2">Седмично Разписание • {term} Срок</p>
-                                        </div>
-                                        <div className="overflow-x-auto p-4 md:p-6" id="schedule-table-container">
-                                            <table className="w-full min-w-[800px] border-collapse" id="schedule-table-print">
-                                                <thead>
-                                                    <tr>
-                                                        <th className="p-3 border-b-2 border-slate-200 text-xs font-black text-slate-400 uppercase w-16">Час</th>
-                                                        {['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'].map(d => (
-                                                            <th key={d} className="p-3 border-b-2 border-slate-200 text-sm font-black text-slate-700 uppercase w-1/5">{d}</th>
-                                                        ))}
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {[1,2,3,4,5,6,7].map(hour => {
-                                                        // Проверка дали целият ред е празен (за да не се показва 7-ми час ако няма нищо)
-                                                        const isRowEmpty = [0,1,2,3,4].every(d => !data.schedules[term]?.[selectedClass]?.[d]?.[hour]);
-                                                        // Ако часът е > 5 и редът е празен, може да го скрием. Но за прегледност ще го оставим.
-
-                                                        return (
-                                                            <tr key={hour} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                                                                <td className="p-4 text-center font-black text-slate-300 text-2xl">{hour}</td>
-                                                                {[0,1,2,3,4].map(dayIdx => {
-                                                                    const cell = data.schedules[term]?.[selectedClass]?.[dayIdx]?.[hour];
-                                                                    const teacher = cell ? data.teachers.find(t => t.id === cell.tId) : null;
-                                                                    return (
-                                                                        <td key={dayIdx} className="p-2 align-top">
-                                                                            {cell ? (
-                                                                                <div className={`p-3 rounded-xl border ${hour > 5 ? 'bg-orange-50 border-orange-200' : 'bg-white border-indigo-100 shadow-sm'} h-full flex flex-col justify-center`}>
-                                                                                    <p className="text-slate-800 font-bold text-xs uppercase leading-tight">{cell.sub}</p>
-                                                                                    <p className="text-indigo-500 font-medium text-[10px] mt-1">{teacher?.name}</p>
-                                                                                </div>
-                                                                            ) : (
-                                                                                <div className="h-full min-h-[60px] rounded-xl border border-dashed border-slate-200 bg-slate-50/50"></div>
-                                                                            )}
-                                                                        </td>
-                                                                    )
-                                                                })}
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400 font-medium">
-                                        Изберете паралелка за преглед на разписанието
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* ТАБ: БАЗА ДАННИ */}
+                        {/* ТАБ 3: БАЗА ДАННИ */}
                         {activeTab === 'database' && (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 
@@ -556,7 +593,7 @@
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                                         {data.classes.map(c => (
                                             <div key={c} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                                                 <span className="font-bold text-slate-700">{c}</span>
@@ -580,7 +617,7 @@
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                                         {data.teachers.map(t => (
                                             <div key={t.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                                                 <span className="font-bold text-slate-700 text-sm">{t.name}</span>
@@ -604,7 +641,7 @@
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                                         {data.subjects.map(s => (
                                             <div key={s} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
                                                 <span className="font-bold text-slate-700 text-sm">{s}</span>
@@ -613,25 +650,97 @@
                                         ))}
                                     </div>
                                 </div>
-
-                                {/* Допълнителни условия */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 md:col-span-2 lg:col-span-3">
-                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-indigo-500">⚙️</span> Допълнителни условия
-                                        </div>
-                                        <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded uppercase tracking-wider">AI Integration / Notes</span>
-                                    </h3>
-                                    <textarea 
-                                        value={data.customConditions}
-                                        onChange={e => updateDataField('customConditions', e.target.value)}
-                                        placeholder="Въведете изисквания (напр. 'Учител Х да няма час в понеделник сутрин', 'Класове от ПГ да нямат 6-ти час' и др.)..."
-                                        className="w-full h-32 bg-slate-50 p-4 rounded-xl border border-slate-200 font-medium text-sm text-slate-700 outline-none focus:border-indigo-500 resize-none"
-                                    ></textarea>
-                                </div>
-
                             </div>
                         )}
+
+                        {/* ТАБ 4: УСЛОВИЯ */}
+                        {activeTab === 'conditions' && (
+                            <div className="max-w-4xl mx-auto space-y-6">
+                                <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200">
+                                    <div className="mb-6 border-b pb-4">
+                                        <h2 className="text-lg font-black uppercase text-slate-800 flex items-center gap-2">
+                                            <span className="w-8 h-8 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center">🚫</span>
+                                            Забрани и Ограничения за Учители
+                                        </h2>
+                                        <p className="text-sm text-slate-500 mt-2 font-medium">Тук можете да зададете условия кога даден преподавател <b>НЕ МОЖЕ</b> да има часове.</p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                                        <div className="md:col-span-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател</label>
+                                            <select value={condForm.tId} onChange={e => setCondForm({...condForm, tId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                                <option value="">-- Изберете учител --</option>
+                                                {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Ден</label>
+                                            <select value={condForm.day} onChange={e => setCondForm({...condForm, day: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                                {DAYS_BG.map((d, index) => <option key={index} value={index}>{d}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Забранен Час</label>
+                                            <select value={condForm.hour} onChange={e => setCondForm({...condForm, hour: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                                {/* Опция за целия ден */}
+                                                <option value="all">Всички (Целият ден)</option>
+                                                {[1,2,3,4,5,6,7].map(h => <option key={h} value={h}>{h}-ви час</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <button 
+                                        onClick={() => {
+                                            if(!condForm.tId) return showToast("Изберете преподавател!");
+                                            const newCond = { id: Date.now().toString(), tId: condForm.tId, day: condForm.day, hour: condForm.hour };
+                                            
+                                            // Проверка дали вече не съществува
+                                            if(data.conditions.some(c => c.tId === newCond.tId && c.day === newCond.day && c.hour === newCond.hour)) {
+                                                return showToast("Това условие вече е добавено!");
+                                            }
+
+                                            updateDataField('conditions', [...data.conditions, newCond]);
+                                            showToast("Условието е запазено!");
+                                        }}
+                                        className="w-full bg-orange-500 text-white p-4 rounded-xl font-black uppercase text-sm hover:bg-orange-600 transition-colors shadow-sm">
+                                        Добави Ограничение
+                                    </button>
+                                </div>
+
+                                {/* Списък с активни условия */}
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                    <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Активни Условия</h3>
+                                    {(!data.conditions || data.conditions.length === 0) ? (
+                                        <p className="text-slate-400 font-medium text-center py-8">Няма въведени ограничения за учителите.</p>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {data.conditions.map(cond => {
+                                                const teacher = data.teachers.find(t => t.id === cond.tId);
+                                                return (
+                                                    <div key={cond.id} className="flex justify-between items-center bg-orange-50/50 border border-orange-100 p-4 rounded-xl">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-10 h-10 bg-white border border-orange-200 text-orange-600 rounded-lg flex items-center justify-center font-black">🚫</div>
+                                                            <div>
+                                                                <p className="font-bold text-slate-800 text-sm leading-tight">{teacher ? teacher.name : 'Неизвестен'}</p>
+                                                                <p className="text-xs text-orange-600 font-semibold mt-1">
+                                                                    Забранено за: {DAYS_BG[cond.day]}, {cond.hour === 'all' ? 'Целият ден' : `${cond.hour}-ви час`}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <button 
+                                                            onClick={() => updateDataField('conditions', data.conditions.filter(c => c.id !== cond.id))}
+                                                            className="text-slate-400 hover:text-red-500 font-bold uppercase text-xs transition-colors">
+                                                            Премахни
+                                                        </button>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                     </main>
                 </div>
             );
