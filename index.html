@@ -3,424 +3,449 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ЦСОП "Леда Милева" - Разписания</title>
+    <title>ЦСОП "Леда Милева" - Система за Разписания</title>
+    <!-- Библиотеки -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+    
     <style>
-        body { font-family: 'Montserrat', sans-serif; }
-        @media print { .no-print { display: none !important; } }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        body { font-family: 'Montserrat', sans-serif; background-color: #f8faff; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
+        @media print { .no-print { display: none !important; } body { background: white; } }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     </style>
 </head>
-<body class="bg-[#f8faff]">
+<body>
     <div id="root"></div>
 
+    <!-- Firebase SDK (зарежда се като модул) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        window.FB = {
+        window.FB = { 
             initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
-            signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot
+            signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot, collection 
         };
     </script>
 
+    <!-- Основно приложение -->
     <script type="text/babel">
-        const checkFirebase = setInterval(() => {
-            if (window.FB) {
-                clearInterval(checkFirebase);
-                startApp();
-            }
-        }, 100);
+        const { useState, useEffect } = React;
 
-        function startApp() {
-            const { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot } = window.FB;
+        function App() {
+            const [ready, setReady] = useState(false);
+            const [user, setUser] = useState(null);
+            const [activeTab, setActiveTab] = useState('schedule');
+            const [term, setTerm] = useState('1');
+            const [selectedClass, setSelectedClass] = useState('');
+            const [isSyncing, setIsSyncing] = useState(false);
+            
+            const [data, setData] = useState({
+                teachers: [],
+                subjects: [],
+                classes: [],
+                curriculum: { '1': {}, '2': {} },
+                schedules: { '1': {}, '2': {} }
+            });
 
-            const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            const appId = window.__app_id || 'csop-leda-mileva-v1';
+            const [newTeacher, setNewTeacher] = useState('');
+            const [newSubject, setNewSubject] = useState('');
+            const [newClass, setNewClass] = useState('');
+            const [curForm, setCurForm] = useState({ teacherId: '', subject: '', hours: 1 });
 
-            const { useState, useEffect } = React;
+            useEffect(() => {
+                const checkFB = setInterval(() => {
+                    if (window.FB) {
+                        clearInterval(checkFB);
+                        initAuth();
+                    }
+                }, 100);
+                return () => clearInterval(checkFB);
+            }, []);
 
-            const DAYS = ['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'];
-            const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+            const initAuth = async () => {
+                const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.FB;
+                const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+                
+                if (!firebaseConfig.apiKey) {
+                    setReady(true);
+                    return;
+                }
 
-            function App() {
-                const [user, setUser] = useState(null);
-                const [activeTab, setActiveTab] = useState('schedule');
-                const [term, setTerm] = useState('1');
-                const [selectedClass, setSelectedClass] = useState('');
-                const [isSyncing, setIsSyncing] = useState(false);
-                const [data, setData] = useState({
-                    teachers: [], subjects: [], classes: [],
-                    curriculum: { '1': {}, '2': {} },
-                    schedules: { '1': {}, '2': {} }
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+
+                    if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                        await signInWithCustomToken(auth, window.__initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+
+                    onAuthStateChanged(auth, (u) => {
+                        setUser(u);
+                        setReady(true);
+                    });
+                } catch (err) {
+                    console.error("Auth error:", err);
+                    setReady(true);
+                }
+            };
+
+            // Коригиран слушател за данни с четен брой сегменти в пътя
+            useEffect(() => {
+                if (!user || !window.FB) return;
+                const { getFirestore, doc, onSnapshot } = window.FB;
+                const db = getFirestore();
+                const appId = window.__app_id || 'default-app-id';
+
+                // Пътят ТРЯБВА да бъде четен: artifacts (1) -> appId (2) -> public (3) -> data (4) -> settings (5) -> master_config (6)
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'master_config');
+                
+                const unsubscribe = onSnapshot(docRef, 
+                    (snap) => {
+                        if (snap.exists()) {
+                            setData(prev => ({ ...prev, ...snap.data() }));
+                        }
+                    },
+                    (error) => {
+                        console.error("Firestore snapshot error:", error);
+                    }
+                );
+
+                return () => unsubscribe();
+            }, [user]);
+
+            const saveToCloud = async (newData) => {
+                if (!window.FB || !user) return;
+                const { getFirestore, doc, setDoc } = window.FB;
+                const db = getFirestore();
+                const appId = window.__app_id || 'default-app-id';
+                
+                setIsSyncing(true);
+                try {
+                    // Пътят ТРЯБВА да бъде четен: artifacts/appId/public/data/settings/master_config
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'master_config');
+                    await setDoc(docRef, newData);
+                } catch (e) { 
+                    console.error("Save error:", e); 
+                } finally { 
+                    setIsSyncing(false); 
+                }
+            };
+
+            const addTeacher = () => {
+                if (!newTeacher.trim()) return;
+                const updated = { ...data, teachers: [...data.teachers, { id: Date.now().toString(), name: newTeacher }] };
+                setData(updated);
+                saveToCloud(updated);
+                setNewTeacher('');
+            };
+
+            const addSubject = () => {
+                if (!newSubject.trim()) return;
+                const updated = { ...data, subjects: [...data.subjects, newSubject] };
+                setData(updated);
+                saveToCloud(updated);
+                setNewSubject('');
+            };
+
+            const addClass = () => {
+                if (!newClass.trim()) return;
+                const updated = { ...data, classes: [...data.classes, newClass] };
+                setData(updated);
+                saveToCloud(updated);
+                setNewClass('');
+            };
+
+            const addToCurriculum = () => {
+                if (!selectedClass || !curForm.teacherId || !curForm.subject) return;
+                const updated = { ...data };
+                if (!updated.curriculum[term]) updated.curriculum[term] = {};
+                if (!updated.curriculum[term][selectedClass]) updated.curriculum[term][selectedClass] = [];
+                updated.curriculum[term][selectedClass].push({ ...curForm, id: Date.now().toString() });
+                setData(updated);
+                saveToCloud(updated);
+            };
+
+            const generateSchedule = () => {
+                const plan = data.curriculum[term]?.[selectedClass] || [];
+                if (plan.length === 0) return alert("Първо добавете учебен план!");
+
+                let newSched = {};
+                [0,1,2,3,4].forEach(d => { newSched[d] = {}; });
+
+                let tasks = [];
+                plan.forEach(item => {
+                    for(let i=0; i<item.hours; i++) tasks.push({ sub: item.subject, tId: item.teacherId });
+                });
+                tasks.sort(() => Math.random() - 0.5);
+
+                tasks.forEach(task => {
+                    let placed = false;
+                    for(let d=0; d<5; d++) {
+                        for(let h=1; h<=7; h++) {
+                            if (!newSched[d][h]) {
+                                newSched[d][h] = task;
+                                placed = true; break;
+                            }
+                        }
+                        if (placed) break;
+                    }
                 });
 
-                // Форма за нов елемент в базата
-                const [newItem, setNewItem] = useState({ teacher: '', subject: '', className: '' });
-                // Форма за учебен план
-                const [curForm, setCurForm] = useState({ class: '', teacherId: '', subject: '', hours: 1 });
-
-                useEffect(() => {
-                    const initAuth = async () => {
-                        try {
-                            if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
-                                await signInWithCustomToken(auth, window.__initial_auth_token);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        } catch (err) { console.error("Auth error:", err); }
-                    };
-                    initAuth();
-                    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
-                    return () => unsubscribe();
-                }, []);
-
-                useEffect(() => {
-                    if (!user) return;
-                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'master_data', 'default');
-                    const unsubscribe = onSnapshot(docRef, (snap) => {
-                        if (snap.exists()) {
-                            const d = snap.data();
-                            setData(d);
-                            if (d.classes?.length > 0 && !selectedClass) setSelectedClass(d.classes[0]);
-                        }
-                    }, (error) => console.error("Firestore sync error:", error));
-                    return () => unsubscribe();
-                }, [user, appId]);
-
-                const save = async (newData) => {
-                    if (!user) return;
-                    setIsSyncing(true);
-                    try {
-                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'master_data', 'default');
-                        await setDoc(docRef, newData);
-                    } catch (err) { console.error("Save error:", err); } 
-                    finally { setIsSyncing(false); }
+                const updated = { 
+                    ...data, 
+                    schedules: { 
+                        ...data.schedules, 
+                        [term]: { ...(data.schedules[term] || {}), [selectedClass]: newSched } 
+                    } 
                 };
+                setData(updated);
+                saveToCloud(updated);
+            };
 
-                const addItem = (type, value) => {
-                    if (!value.trim()) return;
-                    let updated = { ...data };
-                    if (type === 'teachers') {
-                        const newId = Date.now().toString();
-                        updated.teachers = [...(data.teachers || []), { id: newId, name: value }];
-                    } else if (type === 'subjects') {
-                        updated.subjects = [...(data.subjects || []), value];
-                    } else if (type === 'classes') {
-                        updated.classes = [...(data.classes || []), value];
-                    }
-                    setData(updated);
-                    save(updated);
-                    setNewItem({ ...newItem, [type === 'teachers' ? 'teacher' : type === 'subjects' ? 'subject' : 'className']: '' });
-                };
+            if (!ready) return <div className="flex h-screen items-center justify-center font-black text-indigo-500 animate-pulse uppercase tracking-widest">Инициализация...</div>;
 
-                const removeItem = (type, indexOrId) => {
-                    let updated = { ...data };
-                    if (type === 'teachers') {
-                        updated.teachers = data.teachers.filter(t => t.id !== indexOrId);
-                    } else if (type === 'subjects') {
-                        updated.subjects = data.subjects.filter((_, i) => i !== indexOrId);
-                    } else if (type === 'classes') {
-                        updated.classes = data.classes.filter((_, i) => i !== indexOrId);
-                    }
-                    setData(updated);
-                    save(updated);
-                };
+            return (
+                <div className="min-h-screen pb-20">
+                    <header className="bg-white p-4 shadow-sm flex items-center justify-between no-print sticky top-0 z-50 border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black shadow-lg shadow-indigo-100">Ц</div>
+                            <div>
+                                <h1 className="text-[12px] font-black text-slate-800 uppercase leading-none">ЦСОП "Леда Милева"</h1>
+                                <p className="text-[9px] font-bold text-indigo-400 mt-1 uppercase tracking-tighter">Система за Разписания</p>
+                            </div>
+                        </div>
 
-                const addCurriculumItem = () => {
-                    if (!curForm.class || !curForm.teacherId || !curForm.subject) return;
-                    
-                    let updated = { ...data };
-                    if (!updated.curriculum) updated.curriculum = { '1': {}, '2': {} };
-                    if (!updated.curriculum[term]) updated.curriculum[term] = {};
-                    if (!updated.curriculum[term][curForm.class]) updated.curriculum[term][curForm.class] = [];
+                        <div className="flex bg-slate-100 p-1 rounded-2xl">
+                            {['schedule', 'curriculum', 'database'].map(t => (
+                                <button key={t} onClick={() => setActiveTab(t)} 
+                                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === t ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                    {t === 'schedule' ? 'График' : t === 'curriculum' ? 'План' : 'База'}
+                                </button>
+                            ))}
+                        </div>
 
-                    const newItem = {
-                        id: Date.now().toString(),
-                        teacherId: curForm.teacherId,
-                        subject: curForm.subject,
-                        hours: parseInt(curForm.hours)
-                    };
+                        <div className="flex items-center gap-3">
+                            {isSyncing && <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>}
+                            <select value={term} onChange={e => setTerm(e.target.value)} className="bg-indigo-50 text-indigo-700 font-black text-[10px] px-4 py-2 rounded-xl border-none outline-none appearance-none cursor-pointer">
+                                <option value="1">I СРОК</option>
+                                <option value="2">II СРОК</option>
+                            </select>
+                        </div>
+                    </header>
 
-                    updated.curriculum[term][curForm.class].push(newItem);
-                    setData(updated);
-                    save(updated);
-                };
-
-                const removeCurriculumItem = (className, itemId) => {
-                    let updated = { ...data };
-                    updated.curriculum[term][className] = updated.curriculum[term][className].filter(i => i.id !== itemId);
-                    setData(updated);
-                    save(updated);
-                };
-
-                const generate = () => {
-                    const cur = data.curriculum?.[term]?.[selectedClass] || [];
-                    if (!cur.length) {
-                        alert("Първо добавете учебен план за тази паралелка в раздел 'План'!");
-                        return;
-                    }
-                    let newSched = {};
-                    DAYS.forEach((_, i) => newSched[i] = {});
-                    let pool = [];
-                    cur.forEach(item => {
-                        for(let i=0; i<item.hours; i++) pool.push({ sub: item.subject, tId: item.teacherId });
-                    });
-                    
-                    // Разбъркваме задачите
-                    pool.sort(() => Math.random() - 0.5);
-
-                    pool.forEach(task => {
-                        let placed = false;
-                        // Опитваме да намерим свободно място
-                        for(let d=0; d<5; d++) {
-                            for(let p of PERIODS) {
-                                if (!newSched[d][p]) {
-                                    newSched[d][p] = task;
-                                    placed = true; break;
-                                }
-                            }
-                            if (placed) break;
-                        }
-                    });
-
-                    const updated = { 
-                        ...data, 
-                        schedules: { 
-                            ...data.schedules, 
-                            [term]: { ...(data.schedules[term] || {}), [selectedClass]: newSched } 
-                        } 
-                    };
-                    setData(updated);
-                    save(updated);
-                };
-
-                return (
-                    <div className="min-h-screen flex flex-col">
-                        <header className="bg-white p-4 shadow-sm flex items-center justify-between no-print border-b border-indigo-50">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl">Ц</div>
-                                <div>
-                                    <h1 className="text-sm font-black text-slate-800 uppercase leading-none">ЦСОП "Леда Милева"</h1>
-                                    <p className="text-[9px] font-bold text-indigo-400 mt-1 uppercase tracking-wider">Система за Разписания</p>
+                    <main className="max-w-7xl mx-auto p-6">
+                        {activeTab === 'schedule' && (
+                            <div className="space-y-6">
+                                <div className="glass-card p-6 rounded-[2rem] flex items-end gap-4 no-print shadow-xl shadow-indigo-100/10">
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2 mb-2 block">Паралелка</label>
+                                        <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none border border-transparent focus:border-indigo-100">
+                                            <option value="">-- Изберете от списъка --</option>
+                                            {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <button onClick={generateSchedule} disabled={!selectedClass} className="h-14 px-8 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-50 transition-all">Генерирай</button>
+                                    <button onClick={() => window.print()} className="h-14 w-14 flex items-center justify-center bg-slate-800 text-white rounded-2xl shadow-lg hover:bg-slate-900 transition-all">🖨️</button>
                                 </div>
-                            </div>
-                            <nav className="flex bg-slate-100 p-1 rounded-xl">
-                                {['schedule', 'curriculum', 'database'].map(t => (
-                                    <button key={t} onClick={() => setActiveTab(t)} className={`px-5 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${activeTab === t ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-                                        {t === 'schedule' ? 'Разписание' : t === 'curriculum' ? 'План' : 'База'}
-                                    </button>
-                                ))}
-                            </nav>
-                            <div className="flex items-center gap-2">
-                                {isSyncing && <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>}
-                                <select value={term} onChange={e => setTerm(e.target.value)} className="bg-indigo-50 text-indigo-700 font-black text-[10px] px-4 py-2 rounded-xl uppercase outline-none">
-                                    <option value="1">I Срок</option>
-                                    <option value="2">II Срок</option>
-                                </select>
-                            </div>
-                        </header>
 
-                        <main className="p-4 flex-1 max-w-7xl mx-auto w-full">
-                            {/* ТАБ РАЗПИСАНИЕ */}
-                            {activeTab === 'schedule' && (
-                                <div className="space-y-6">
-                                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap gap-4 items-center no-print">
-                                        <div className="flex-1 min-w-[200px]">
-                                            <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Изберете паралелка:</p>
-                                            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 outline-none">
+                                {selectedClass ? (
+                                    <div className="bg-white rounded-[3rem] shadow-2xl shadow-indigo-100/30 overflow-hidden border border-slate-100">
+                                        <div className="p-10 text-center bg-indigo-50/20 border-b border-indigo-50">
+                                            <h2 className="text-3xl font-black text-slate-800 uppercase">{selectedClass}</h2>
+                                            <p className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.4em] mt-3">Седмично Разписание</p>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full border-collapse">
+                                                <thead>
+                                                    <tr className="bg-slate-50/50">
+                                                        <th className="p-4 border-b text-[10px] font-black text-slate-300 uppercase">№</th>
+                                                        {['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'].map(d => (
+                                                            <th key={d} className="p-6 border-b text-[10px] font-black text-slate-600 uppercase tracking-widest">{d}</th>
+                                                        ))}
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {[1,2,3,4,5,6,7].map(h => (
+                                                        <tr key={h} className="border-b border-slate-50 last:border-0">
+                                                            <td className="p-8 text-center font-black text-slate-200 text-3xl">{h}</td>
+                                                            {[0,1,2,3,4].map(di => {
+                                                                const cell = data.schedules[term]?.[selectedClass]?.[di]?.[h];
+                                                                const teacher = data.teachers.find(t => t.id === cell?.tId);
+                                                                return (
+                                                                    <td key={di} className="p-2 min-w-[160px] h-32">
+                                                                        {cell && (
+                                                                            <div className="bg-white border border-indigo-50 p-4 rounded-3xl h-full flex flex-col justify-center text-center shadow-sm hover:border-indigo-200 transition-all scale-100 hover:scale-[1.02]">
+                                                                                <p className="text-slate-800 font-black text-[11px] uppercase leading-tight">{cell.sub}</p>
+                                                                                <p className="text-indigo-400 font-bold text-[8px] uppercase mt-3 tracking-wider">{teacher?.name || '---'}</p>
+                                                                            </div>
+                                                                        )}
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="py-32 text-center glass-card rounded-[3rem] border-2 border-dashed border-slate-100">
+                                        <p className="text-slate-400 font-black uppercase tracking-widest text-xs">Изберете паралелка за визуализация</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'curriculum' && (
+                            <div className="max-w-4xl mx-auto space-y-6">
+                                <div className="glass-card p-8 rounded-[2.5rem] shadow-xl shadow-indigo-100/20">
+                                    <h3 className="text-sm font-black uppercase text-indigo-600 mb-8 tracking-widest flex items-center gap-3">
+                                        <span className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600 text-xs">➕</span>
+                                        Нов запис в учебния план
+                                    </h3>
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div className="md:col-span-2">
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Група / Паралелка</label>
+                                            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none">
                                                 <option value="">-- Избор --</option>
-                                                {data.classes?.map(c => <option key={c} value={c}>{c}</option>)}
+                                                {data.classes.map(c => <option key={c} value={c}>{c}</option>)}
                                             </select>
                                         </div>
-                                        <button onClick={generate} disabled={!selectedClass} className="bg-indigo-600 text-white px-8 h-12 rounded-2xl font-black text-[11px] uppercase shadow-lg shadow-indigo-100 hover:bg-indigo-700 disabled:opacity-30">
-                                            Генерирай по План
-                                        </button>
-                                        <button onClick={() => window.print()} className="bg-slate-800 text-white p-3 px-6 rounded-2xl text-[10px] font-bold uppercase">Печат</button>
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Учител</label>
+                                            <select value={curForm.teacherId} onChange={e => setCurForm({...curForm, teacherId: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none">
+                                                <option value="">-- Избор --</option>
+                                                {data.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Предмет</label>
+                                            <select value={curForm.subject} onChange={e => setCurForm({...curForm, subject: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none">
+                                                <option value="">-- Избор --</option>
+                                                {data.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="md:col-span-2 flex items-end gap-4">
+                                            <div className="flex-1">
+                                                <label className="text-[9px] font-black text-slate-400 uppercase mb-2 block ml-2">Брой часове</label>
+                                                <input type="number" min="1" max="10" value={curForm.hours} onChange={e => setCurForm({...curForm, hours: parseInt(e.target.value)})} 
+                                                    className="w-full bg-slate-50 p-4 rounded-2xl font-bold text-slate-800 outline-none" />
+                                            </div>
+                                            <button onClick={addToCurriculum} className="bg-indigo-600 text-white px-10 h-[56px] rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-indigo-100 hover:bg-indigo-700">Добави в план</button>
+                                        </div>
                                     </div>
-
-                                    {selectedClass ? (
-                                        <div className="bg-white rounded-[2.5rem] shadow-sm overflow-hidden border border-slate-100">
-                                            <div className="p-8 text-center bg-slate-50/50">
-                                                <h2 className="text-2xl font-black uppercase text-slate-800">{selectedClass}</h2>
-                                                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.4em] mt-2">Седмично Разписание • {term} Срок</p>
-                                            </div>
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full border-collapse">
-                                                    <thead>
-                                                        <tr className="bg-slate-50">
-                                                            <th className="p-4 border-b text-[10px] text-slate-300 uppercase">Час</th>
-                                                            {DAYS.map(d => <th key={d} className="p-4 border-b text-[10px] font-black text-slate-600 uppercase tracking-widest">{d}</th>)}
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {PERIODS.map(p => (
-                                                            <tr key={p} className="hover:bg-slate-50/50 transition-colors">
-                                                                <td className="p-6 text-center font-black text-slate-200 text-2xl border-r border-slate-50">{p}</td>
-                                                                {DAYS.map((_, di) => {
-                                                                    const cell = data.schedules?.[term]?.[selectedClass]?.[di]?.[p];
-                                                                    const teacherName = data.teachers?.find(t => t.id === cell?.tId)?.name;
-                                                                    return (
-                                                                        <td key={di} className="p-2 border-r border-slate-50 min-w-[140px] h-28">
-                                                                            {cell && (
-                                                                                <div className="bg-white border border-indigo-100 p-3 rounded-2xl h-full flex flex-col justify-center text-center shadow-sm hover:scale-105 transition-transform">
-                                                                                    <p className="text-indigo-900 font-black text-[10px] uppercase leading-tight">{cell.sub}</p>
-                                                                                    <p className="text-slate-400 font-bold text-[8px] uppercase mt-2">{teacherName || '---'}</p>
-                                                                                </div>
-                                                                            )}
-                                                                        </td>
-                                                                    );
-                                                                })}
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="text-center p-20 bg-white rounded-[3rem] border border-dashed border-slate-200">
-                                            <p className="text-slate-400 font-bold uppercase tracking-widest text-sm">Изберете група, за да видите разписанието</p>
-                                        </div>
-                                    )}
                                 </div>
-                            )}
 
-                            {/* ТАБ УЧЕБЕН ПЛАН (НОВО) */}
-                            {activeTab === 'curriculum' && (
-                                <div className="space-y-6">
-                                    <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                                        <h3 className="text-sm font-black uppercase text-indigo-600 mb-6 tracking-widest">Добавяне на часове към План</h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-                                            <div>
-                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Паралелка</p>
-                                                <select value={curForm.class} onChange={e => setCurForm({...curForm, class: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 text-xs outline-none">
-                                                    <option value="">Избери...</option>
-                                                    {data.classes?.map(c => <option key={c} value={c}>{c}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Учител</p>
-                                                <select value={curForm.teacherId} onChange={e => setCurForm({...curForm, teacherId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 text-xs outline-none">
-                                                    <option value="">Избери...</option>
-                                                    {data.teachers?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Предмет</p>
-                                                <select value={curForm.subject} onChange={e => setCurForm({...curForm, subject: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 text-xs outline-none">
-                                                    <option value="">Избери...</option>
-                                                    {data.subjects?.map(s => <option key={s} value={s}>{s}</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Часове/седмица</p>
-                                                <input type="number" min="1" max="10" value={curForm.hours} onChange={e => setCurForm({...curForm, hours: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold text-slate-800 text-xs outline-none" />
-                                            </div>
-                                            <button onClick={addCurriculumItem} className="bg-indigo-600 text-white h-[44px] rounded-xl font-black text-[10px] uppercase shadow-lg shadow-indigo-100 hover:bg-indigo-700">Добави в План</button>
+                                {selectedClass && (
+                                    <div className="bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-50">
+                                        <h4 className="text-[10px] font-black uppercase text-slate-400 mb-6 tracking-widest italic">Текущ план за {selectedClass}</h4>
+                                        <div className="space-y-2">
+                                            {(data.curriculum[term]?.[selectedClass] || []).map((item, idx) => (
+                                                <div key={item.id || idx} className="flex items-center justify-between p-5 bg-slate-50 rounded-2xl border border-transparent hover:border-indigo-100">
+                                                    <div>
+                                                        <p className="font-black text-slate-800 text-xs uppercase">{item.subject}</p>
+                                                        <p className="text-[10px] font-bold text-indigo-500 uppercase mt-1">
+                                                            {data.teachers.find(t => t.id === item.teacherId)?.name} • {item.hours} ч.
+                                                        </p>
+                                                    </div>
+                                                    <button onClick={() => {
+                                                        const updated = {...data};
+                                                        updated.curriculum[term][selectedClass].splice(idx, 1);
+                                                        setData(updated);
+                                                        saveToCloud(updated);
+                                                    }} className="text-slate-300 hover:text-red-500 font-black text-xl px-2">×</button>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
+                                )}
+                            </div>
+                        )}
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                        {data.classes?.map(c => (
-                                            <div key={c} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                                                <h4 className="font-black text-slate-800 text-xs uppercase mb-4 border-b border-slate-50 pb-2">{c}</h4>
-                                                <div className="space-y-2">
-                                                    {data.curriculum?.[term]?.[c]?.length > 0 ? (
-                                                        data.curriculum[term][c].map(item => (
-                                                            <div key={item.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl group">
-                                                                <div className="flex flex-col">
-                                                                    <span className="text-[10px] font-black text-indigo-700">{item.subject} ({item.hours} ч.)</span>
-                                                                    <span className="text-[9px] font-bold text-slate-400 uppercase">{data.teachers.find(t => t.id === item.teacherId)?.name}</span>
-                                                                </div>
-                                                                <button onClick={() => removeCurriculumItem(c, item.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 font-black">×</button>
-                                                            </div>
-                                                        ))
-                                                    ) : (
-                                                        <p className="text-[9px] text-slate-300 uppercase font-bold italic">Няма зададен план</p>
-                                                    )}
-                                                </div>
+                        {activeTab === 'database' && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                                {/* Учители */}
+                                <div className="glass-card p-6 rounded-[2.5rem] flex flex-col h-[600px]">
+                                    <h3 className="font-black uppercase text-indigo-600 text-[10px] mb-6 tracking-widest">Персонал</h3>
+                                    <div className="flex gap-2 mb-6">
+                                        <input value={newTeacher} onChange={e => setNewTeacher(e.target.value)} placeholder="Име..." className="flex-1 bg-slate-50 p-4 rounded-2xl text-xs font-bold outline-none" />
+                                        <button onClick={addTeacher} className="w-14 h-14 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100">+</button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                                        {data.teachers.map(t => (
+                                            <div key={t.id} className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between group border border-transparent hover:border-slate-100">
+                                                <span className="text-xs font-bold text-slate-700">{t.name}</span>
+                                                <button onClick={() => {
+                                                    const updated = {...data, teachers: data.teachers.filter(x => x.id !== t.id)};
+                                                    setData(updated); saveToCloud(updated);
+                                                }} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all font-black">×</button>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                            )}
-                            
-                            {/* ТАБ БАЗА ДАННИ */}
-                            {activeTab === 'database' && (
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-6">
-                                    {/* Учители */}
-                                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col h-[500px]">
-                                        <h3 className="text-xs font-black uppercase text-indigo-600 mb-4 tracking-widest">Учители / Терапевти</h3>
-                                        <div className="flex gap-2 mb-4">
-                                            <input value={newItem.teacher} onChange={e => setNewItem({...newItem, teacher: e.target.value})} placeholder="Име..." className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-bold outline-none border border-transparent focus:border-indigo-200" />
-                                            <button onClick={() => addItem('teachers', newItem.teacher)} className="bg-indigo-600 text-white w-10 h-10 rounded-xl font-bold text-lg">+</button>
-                                        </div>
-                                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                                            {data.teachers?.map(t => (
-                                                <div key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl mb-2 group">
-                                                    <span className="text-[11px] font-bold text-slate-700">{t.name}</span>
-                                                    <button onClick={() => removeItem('teachers', t.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all font-black">×</button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
 
-                                    {/* Предмети */}
-                                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col h-[500px]">
-                                        <h3 className="text-xs font-black uppercase text-indigo-600 mb-4 tracking-widest">Учебни Предмети</h3>
-                                        <div className="flex gap-2 mb-4">
-                                            <input value={newItem.subject} onChange={e => setNewItem({...newItem, subject: e.target.value})} placeholder="Предмет..." className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-bold outline-none border border-transparent focus:border-indigo-200" />
-                                            <button onClick={() => addItem('subjects', newItem.subject)} className="bg-indigo-600 text-white w-10 h-10 rounded-xl font-bold text-lg">+</button>
-                                        </div>
-                                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                                            {data.subjects?.map((s, i) => (
-                                                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl mb-2 group">
-                                                    <span className="text-[11px] font-bold text-slate-700">{s}</span>
-                                                    <button onClick={() => removeItem('subjects', i)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all font-black">×</button>
-                                                </div>
-                                            ))}
-                                        </div>
+                                {/* Предмети */}
+                                <div className="glass-card p-6 rounded-[2.5rem] flex flex-col h-[600px]">
+                                    <h3 className="font-black uppercase text-indigo-600 text-[10px] mb-6 tracking-widest">Дисциплини</h3>
+                                    <div className="flex gap-2 mb-6">
+                                        <input value={newSubject} onChange={e => setNewSubject(e.target.value)} placeholder="Име..." className="flex-1 bg-slate-50 p-4 rounded-2xl text-xs font-bold outline-none" />
+                                        <button onClick={addSubject} className="w-14 h-14 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100">+</button>
                                     </div>
-
-                                    {/* Паралелки */}
-                                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col h-[500px]">
-                                        <h3 className="text-xs font-black uppercase text-indigo-600 mb-4 tracking-widest">Групи / Паралелки</h3>
-                                        <div className="flex gap-2 mb-4">
-                                            <input value={newItem.className} onChange={e => setNewItem({...newItem, className: e.target.value})} placeholder="Име на група..." className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-bold outline-none border border-transparent focus:border-indigo-200" />
-                                            <button onClick={() => addItem('classes', newItem.className)} className="bg-indigo-600 text-white w-10 h-10 rounded-xl font-bold text-lg">+</button>
-                                        </div>
-                                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                                            {data.classes?.map((c, i) => (
-                                                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl mb-2 group">
-                                                    <span className="text-[11px] font-bold text-slate-700">{c}</span>
-                                                    <button onClick={() => removeItem('classes', i)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all font-black">×</button>
-                                                </div>
-                                            ))}
-                                        </div>
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                                        {data.subjects.map((s, i) => (
+                                            <div key={i} className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between group border border-transparent hover:border-slate-100">
+                                                <span className="text-xs font-bold text-slate-700">{s}</span>
+                                                <button onClick={() => {
+                                                    const updated = {...data, subjects: data.subjects.filter((_, idx) => idx !== i)};
+                                                    setData(updated); saveToCloud(updated);
+                                                }} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all font-black">×</button>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
-                            )}
-                        </main>
 
-                        <footer className="p-8 text-center text-[9px] font-black text-slate-300 uppercase tracking-[0.5em] no-print mt-auto">
-                            ЦСОП "Леда Милева" • Система за Разписания v2.6
-                        </footer>
-                    </div>
-                );
-            }
+                                {/* Групи */}
+                                <div className="glass-card p-6 rounded-[2.5rem] flex flex-col h-[600px]">
+                                    <h3 className="font-black uppercase text-indigo-600 text-[10px] mb-6 tracking-widest">Паралелки</h3>
+                                    <div className="flex gap-2 mb-6">
+                                        <input value={newClass} onChange={e => setNewClass(e.target.value)} placeholder="Име..." className="flex-1 bg-slate-50 p-4 rounded-2xl text-xs font-bold outline-none" />
+                                        <button onClick={addClass} className="w-14 h-14 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100">+</button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                                        {data.classes.map((c, i) => (
+                                            <div key={i} className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between group border border-transparent hover:border-slate-100">
+                                                <span className="text-xs font-bold text-slate-700">{c}</span>
+                                                <button onClick={() => {
+                                                    const updated = {...data, classes: data.classes.filter((_, idx) => idx !== i)};
+                                                    setData(updated); saveToCloud(updated);
+                                                }} className="text-slate-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all font-black">×</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
 
-            const root = ReactDOM.createRoot(document.getElementById('root'));
-            root.render(<App />);
+                    <footer className="fixed bottom-0 w-full p-6 text-center text-[8px] font-black text-slate-300 uppercase tracking-[0.8em] no-print pointer-events-none">
+                        ЦСОП "Леда Милева" • 2026 • v3.2
+                    </footer>
+                </div>
+            );
         }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
