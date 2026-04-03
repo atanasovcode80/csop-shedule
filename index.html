@@ -74,6 +74,34 @@
         const DAYS_BG = ['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'];
         const AVAILABLE_YEARS = ['2024/2025', '2025/2026', '2026/2027', '2027/2028', '2028/2029'];
 
+        // СПИСЪЦИ ЗА АВТОМАТИЧНО ДОБАВЯНЕ (Извлечени от снимките)
+        const PREDEFINED_TEACHERS = [
+            "Милена Рачовска", "Калинка Илиева", "Галя Ненчева", "Петринка Нанова", 
+            "Цветанка Брайкова", "Тони Иванов", "Цветанка Михайлова", "Огнян Йорданов", 
+            "Атанас Атанасов", "Валентин Кръстев", "Гергана Ненова", "Петя Миланова", 
+            "Любомира Пенева", "Катина Василева", "Весела Стоянова", "Габриела Мандалева"
+        ];
+
+        const PREDEFINED_SUBJECTS = [
+            "Български език и литература", "Математика", "Човекът и природата", "Музика", 
+            "Изобразително изкуство", "Физическо възпитание и спорт", "Компютърно моделиране", 
+            "Технологии и предприемачество", "Родинознание", "Човекът и обществото", 
+            "Родинознание/ Човекът и обществото", "Гражданско образование", "География и икономика", 
+            "История и цивилизации", "Компютърно моделиране и информационни технологии", 
+            "Биология и здравно образование", "Основи на земеделието", 
+            "Учебна практика - Основи на земеделието", "Основи на земеделието - Растениевъдство", 
+            "Основи на земеделието - Механизация", "Учебна практика - Основи на земеделието - Растениевъдство", 
+            "Учебна практика - основи на земеделието - механизация", "Материалознание", 
+            "Учебна практика процеси и машини в шевната промишленост - работа с шевни машини", 
+            "Процеси и машини в шевната промишленост - устройство на шевните машини", 
+            "Процеси и машини в шевната промишленост - видове бодове", 
+            "Учебна практика процеси и машини в шевната промишленост - изработване на елементи от облеклото",
+            "Информационни технологии", "Здравословни и безопасни условия на труд",
+            "Процеси и машини в конфекционното производство", "Учебна практика-процеси и машини в конфекционното производство",
+            "Икономика", "Спортни дейности (футбол)", "Безопасност на движението", 
+            "Консултиране на родители, деца и ученици и водене на задължителна документация"
+        ];
+
         function App() {
             // Аутентикация с парола
             const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -205,9 +233,41 @@
                                             if (!updatedYearlyData['2025/2026'].conditions) updatedYearlyData['2025/2026'].conditions = dbData.conditions || [];
                                         }
 
+                                        // АВТОМАТИЧНО ДОБАВЯНЕ НА НОВИТЕ УЧИТЕЛИ И ПРЕДМЕТИ (САМО ВЕДНЪЖ)
+                                        let needsSave = false;
+                                        if (!dbData.predefinedAdded_v3) {
+                                            const cy = '2025/2026';
+                                            
+                                            PREDEFINED_TEACHERS.forEach((pt, i) => {
+                                                // Проверяваме дали учителят вече не съществува
+                                                if (!updatedYearlyData[cy].teachers.some(t => t.name === pt)) {
+                                                    updatedYearlyData[cy].teachers.push({ id: `predef_t_${Date.now()}_${i}`, name: pt });
+                                                    needsSave = true;
+                                                }
+                                            });
+
+                                            PREDEFINED_SUBJECTS.forEach(ps => {
+                                                // Проверяваме дали предметът вече не съществува
+                                                if (!updatedYearlyData[cy].subjects.includes(ps)) {
+                                                    updatedYearlyData[cy].subjects.push(ps);
+                                                    needsSave = true;
+                                                }
+                                            });
+                                        }
+
+                                        if (needsSave && window.FB_SDK) {
+                                            // Ако сме добавили нови елементи, веднага запазваме в базата с флаг predefinedAdded_v3: true, 
+                                            // за да не се добавят втори път (дори ако потребителят ги изтрие).
+                                            const appSave = window.FB_SDK.initializeApp(firebaseConfig);
+                                            const dbSave = window.FB_SDK.getFirestore(appSave);
+                                            const docRefSave = window.FB_SDK.doc(dbSave, 'artifacts', APP_ID, 'public', 'data', 'school', 'master');
+                                            window.FB_SDK.setDoc(docRefSave, { ...dbData, yearlyData: updatedYearlyData, predefinedAdded_v3: true }, { merge: true });
+                                            return; // Спираме тук, понеже записът ще предизвика ново извикване на onSnapshot
+                                        }
+
                                         setData({ yearlyData: updatedYearlyData });
                                     } else {
-                                        // Ако няма документ
+                                        // Ако няма документ изобщо (чисто нова база)
                                         setData({ yearlyData: { '2025/2026': { classes: [], teachers: [], subjects: [], conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } } } });
                                     }
                                     setReady(true);
@@ -232,7 +292,7 @@
                     const app = window.FB_SDK.initializeApp(firebaseConfig);
                     const db = window.FB_SDK.getFirestore(app);
                     const docRef = window.FB_SDK.doc(db, 'artifacts', APP_ID, 'public', 'data', 'school', 'master');
-                    await window.FB_SDK.setDoc(docRef, updatedData);
+                    await window.FB_SDK.setDoc(docRef, updatedData, { merge: true });
                     setData(updatedData);
                 } catch (error) {
                     console.error("Грешка при запис:", error);
@@ -595,7 +655,7 @@
                                 {/* Дясна част: Меню & Изход */}
                                 <div className="flex flex-col lg:flex-row items-center gap-3 lg:gap-4 w-full xl:w-auto overflow-hidden">
                                     
-                                    {/* Навигационни бутони (с хоризонтален скрол при нужда) */}
+                                    {/* Навигационни бутони */}
                                     <div className="flex bg-slate-800 p-1 md:p-1.5 rounded-xl gap-1 overflow-x-auto w-full lg:w-auto hide-scrollbar">
                                         <button onClick={() => setActiveTab('schedule')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'schedule' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Разписание</button>
                                         <button onClick={() => setActiveTab('curriculum')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'curriculum' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Учебен План</button>
@@ -931,8 +991,13 @@
                                         <input value={newTeacher} onChange={e=>setNewTeacher(e.target.value)} placeholder="Име Фамилия" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
                                         <button onClick={() => {
                                             if(newTeacher) {
-                                                updateYearlyDataField('teachers', [...currentTeachers, { id: Date.now().toString(), name: newTeacher }]);
-                                                setNewTeacher('');
+                                                // Проверка да не се дублира името
+                                                if(!currentTeachers.some(t => t.name.toLowerCase() === newTeacher.toLowerCase())) {
+                                                    updateYearlyDataField('teachers', [...currentTeachers, { id: Date.now().toString(), name: newTeacher }]);
+                                                    setNewTeacher('');
+                                                } else {
+                                                    showToast("Този учител вече съществува!");
+                                                }
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
@@ -954,9 +1019,13 @@
                                     <div className="flex gap-2 mb-4">
                                         <input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="Напр. БЕЛ" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
                                         <button onClick={() => {
-                                            if(newSubject && !currentSubjects.includes(newSubject)) {
-                                                updateYearlyDataField('subjects', [...currentSubjects, newSubject]);
-                                                setNewSubject('');
+                                            if(newSubject) {
+                                                if(!currentSubjects.some(s => s.toLowerCase() === newSubject.toLowerCase())) {
+                                                    updateYearlyDataField('subjects', [...currentSubjects, newSubject]);
+                                                    setNewSubject('');
+                                                } else {
+                                                    showToast("Този предмет вече съществува!");
+                                                }
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
