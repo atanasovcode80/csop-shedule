@@ -1,191 +1,443 @@
-<!DOCTYPE html>
-<html lang="bg">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Генератор на Разписания - ЦСОП "Леда Милева"</title>
-    <!-- Dependencies -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+import React, { useState, useEffect } from 'react';
+import { initializeApp, getApps } from 'firebase/app';
+import { getFirestore, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+
+const firebaseConfig = {
+    apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
+    authDomain: "generator-razpisanie.firebaseapp.com",
+    projectId: "generator-razpisanie",
+    storageBucket: "generator-razpisanie.firebasestorage.app",
+    messagingSenderId: "756529315524",
+    appId: "1:756529315524:web:faa5e91bdd62c2e05ed391"
+};
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'csop-leda-mileva';
+const DAYS = ["Понеделник", "Вторник", "Сряда", "Четвъртък", "Петък"];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+
+export default function App() {
+    const [user, setUser] = useState(null);
+    const [activeTab, setActiveTab] = useState('curriculum');
+    const [loading, setLoading] = useState(true);
+    const [isOnline, setIsOnline] = useState(false);
     
-    <!-- Използваме директно SVG икони за пълна стабилност -->
-    <!-- Firebase SDKs (Compat version) -->
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    const [selectedYear, setSelectedYear] = useState('2025/2026');
+    const [selectedTerm, setSelectedTerm] = useState(1);
+    const [selectedClass, setSelectedClass] = useState('I паралелка');
 
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .animate-spin-slow { animation: spin 3s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body class="bg-slate-50">
-    <div id="root"></div>
+    const [data, setData] = useState({
+        teachers: ["Калинка Илиева", "Галя Ненчева", "Петринка Нанова", "Цветанка Брайкова", "Огнян Йорданов"],
+        subjects: ["БЕЛ", "Математика", "ФВС", "Музика", "ИТ", "РКН", "Логопед", "Психолог"],
+        classes: ["I паралелка", "II паралелка", "III паралелка", "IV паралелка", "V паралелка"],
+        constraints: [], 
+        curriculum: {}, 
+        schedule: {} 
+    });
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
+    useEffect(() => {
+        let app;
+        try { app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0]; } catch (e) { setLoading(false); return; }
+        const auth = getAuth(app);
+        const db = getFirestore(app);
 
-        // Потребителски икони чрез SVG за избягване на проблеми с външни библиотеки
-        const Icon = ({ name, size = 24, className = "" }) => {
-            const icons = {
-                graduation: <path d="M22 10v6M2 10l10-5 10 5-10 5zM6 12v5c3 3 9 3 12 0v-5" />,
-                calendar: <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><path d="M16 2v4M8 2v4M3 10h18" />,
-                refresh: <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85.83 6.72 2.27L21 8M21 3v5h-5" />,
-                clock: <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
-            };
-            return (
-                <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-                    {icons[name]}
-                </svg>
-            );
+        const initAuth = async () => {
+            try { await signInAnonymously(auth); setIsOnline(true); } catch (err) { setIsOnline(false); setLoading(false); }
         };
+        initAuth();
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
-            authDomain: "generator-razpisanie.firebaseapp.com",
-            databaseURL: "https://generator-razpisanie-default-rtdb.europe-west1.firebasedatabase.app",
-            projectId: "generator-razpisanie",
-            storageBucket: "generator-razpisanie.firebasestorage.app",
-            messagingSenderId: "756529315524",
-            appId: "1:756529315524:web:faa5e91bdd62c2e05ed391",
-            measurementId: "G-ZRRXFYTKM1"
-        };
+        const unsubAuth = onAuthStateChanged(auth, (currUser) => {
+            setUser(currUser);
+            if (currUser) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'master_data_v2');
+                onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setData(prev => ({ ...prev, ...docSnap.data() }));
+                    }
+                    setLoading(false);
+                }, () => setLoading(false));
+            } else { setTimeout(() => setLoading(false), 2000); }
+        });
+        return () => unsubAuth();
+    }, []);
 
-        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        const auth = firebase.auth();
-        const appId = "csop-leda-mileva-main";
+    const updateCloud = async (newData) => {
+        setData(newData);
+        if (!isOnline || !user) return;
+        try { await setDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'master_data_v2'), newData); } catch (e) { console.error(e); }
+    };
 
-        const INITIAL_TEACHERS = [
-            { id: '1', name: 'Калинка Илиева' }, { id: '2', name: 'Галя Ненчева' },
-            { id: '3', name: 'Петринка Нанова' }, { id: '4', name: 'Цветанка Брайкова' },
-            { id: '5', name: 'Огнян Йорданов' }, { id: '6', name: 'Атанас Атанасов' },
-            { id: '7', name: 'Цветанка Михайлова' }, { id: '8', name: 'Петя Миланова' },
-            { id: '9', name: 'Тони Иванов' }, { id: '10', name: 'Валентин Кръстев' },
-            { id: '11', name: 'Таня Петкова' }, { id: '12', name: 'Габриела Мандалева' },
-            { id: '13', name: 'Гергана Ненова' }
-        ];
+    const getTermData = (year, term) => data.curriculum[year]?.[term] || {};
+    
+    const addCurriculumEntry = (teacher, subject, hours) => {
+        const newData = { ...data };
+        if (!newData.curriculum[selectedYear]) newData.curriculum[selectedYear] = {};
+        if (!newData.curriculum[selectedYear][selectedTerm]) newData.curriculum[selectedYear][selectedTerm] = {};
+        if (!newData.curriculum[selectedYear][selectedTerm][selectedClass]) newData.curriculum[selectedYear][selectedTerm][selectedClass] = [];
+        
+        newData.curriculum[selectedYear][selectedTerm][selectedClass].push({ 
+            id: Math.random().toString(36).substr(2, 9),
+            teacher, 
+            subject, 
+            hours: parseInt(hours) 
+        });
+        updateCloud(newData);
+    };
 
-        function App() {
-            const [user, setUser] = useState(null);
-            const [loading, setLoading] = useState(true);
-            const [syncing, setSyncing] = useState(false);
-            const [authError, setAuthError] = useState(false);
-            const [activeTab, setActiveTab] = useState('schedule');
-            const [data, setData] = useState({
-                teachers: INITIAL_TEACHERS,
-                classes: ['ПГ', 'I паралелка', 'II паралелка', 'III паралелка', 'IV паралелка'],
-                subjects: ['БЕЛ', 'Математика', 'ФВС', 'Музика', 'ИТ', 'РКН'],
-                curriculum: { '1': {} },
-                schedules: { '1': {} }
+    const removeCurriculumEntry = (id) => {
+        const newData = { ...data };
+        newData.curriculum[selectedYear][selectedTerm][selectedClass] = 
+            newData.curriculum[selectedYear][selectedTerm][selectedClass].filter(e => e.id !== id);
+        updateCloud(newData);
+    };
+
+    const copyToSecondTerm = () => {
+        const newData = { ...data };
+        if (!newData.curriculum[selectedYear]) return;
+        newData.curriculum[selectedYear][2] = JSON.parse(JSON.stringify(newData.curriculum[selectedYear][1] || {}));
+        updateCloud(newData);
+        setSelectedTerm(2);
+    };
+
+    // ГЕНЕРАТОР С ПРОВЕРКА ЗА ЗАСИЧАНЕ МЕЖДУ ВСИЧКИ ПАРАЛЕЛКИ
+    const generateSchedule = () => {
+        const newSchedule = {};
+        const termData = getTermData(selectedYear, selectedTerm);
+        const tasks = [];
+
+        // 1. Подготовка на всички задачи за разпределяне
+        Object.entries(termData).forEach(([cls, entries]) => {
+            newSchedule[cls] = {};
+            entries.forEach(entry => {
+                for (let i = 0; i < entry.hours; i++) {
+                    tasks.push({ classId: cls, teacher: entry.teacher, subject: entry.subject });
+                }
             });
+        });
 
-            useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        await auth.signInAnonymously();
-                    } catch (e) {
-                        console.error("Auth error:", e);
-                        setAuthError(true);
-                    }
-                };
-                initAuth();
-                const unsubAuth = auth.onAuthStateChanged(u => setUser(u));
-                return () => unsubAuth();
-            }, []);
+        // Случайно разбъркване на задачите за по-добро разпределение
+        tasks.sort(() => Math.random() - 0.5);
 
-            useEffect(() => {
-                if (!user) return;
-                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('master_data');
-                const unsub = docRef.onSnapshot(doc => {
-                    if (doc.exists) {
-                        setData(doc.data());
-                    } else {
-                        docRef.set(data);
+        // 2. Основен цикъл по дни и часове
+        DAYS.forEach(day => {
+            PERIODS.forEach(period => {
+                // ТУК Е КЛЮЧЪТ: Списък на учителите, които ВЕЧЕ са заети в този час някъде в центъра
+                const globalBusyTeachersThisPeriod = new Set();
+
+                // Опитваме се да попълним този час за всяка паралелка
+                data.classes.forEach(cls => {
+                    const findValidTask = () => {
+                        for (let i = 0; i < tasks.length; i++) {
+                            const t = tasks[i];
+                            
+                            // Задачата трябва да е за текущата паралелка
+                            if (t.classId !== cls) continue;
+
+                            // ПРОВЕРКА 1: Този учител зает ли е вече в ДРУГА паралелка в този час?
+                            if (globalBusyTeachersThisPeriod.has(t.teacher)) continue;
+
+                            // ПРОВЕРКА 2: Има ли учителят индивидуална забрана (Constraint)?
+                            const hasConstraint = data.constraints.some(c => 
+                                c.teacher === t.teacher && 
+                                c.day === day && 
+                                parseInt(c.period) === period
+                            );
+                            if (hasConstraint) continue;
+
+                            // Ако премине проверките, махаме задачата от списъка и я зачисляваме
+                            globalBusyTeachersThisPeriod.add(t.teacher);
+                            return tasks.splice(i, 1)[0];
+                        }
+                        return null;
+                    };
+
+                    const assigned = findValidTask();
+                    if (assigned) {
+                        newSchedule[cls][`${day}-${period}`] = assigned;
                     }
-                    setLoading(false);
-                }, (err) => {
-                    console.error("Firestore Error:", err);
-                    setLoading(false);
                 });
-                return () => unsub();
-            }, [user]);
+            });
+        });
 
-            if (authError) return (
-                <div className="h-screen flex items-center justify-center bg-white flex-col gap-4 p-6 text-center">
-                    <div className="bg-red-50 text-red-500 p-6 rounded-3xl max-w-md">
-                        <h2 className="font-black mb-2 uppercase">Грешка в оторизацията</h2>
-                        <p className="text-sm font-medium">Моля, активирайте "Anonymous" входа във Вашия Firebase проект (Authentication -> Sign-in method).</p>
+        const updatedSched = { ...data.schedule };
+        if (!updatedSched[selectedYear]) updatedSched[selectedYear] = {};
+        updatedSched[selectedYear][selectedTerm] = newSchedule;
+        updateCloud({ ...data, schedule: updatedSched });
+    };
+
+    if (loading) return <div className="h-screen flex items-center justify-center font-black text-slate-400 animate-pulse uppercase tracking-widest">Зареждане на ЦСОП...</div>;
+
+    return (
+        <div className="min-h-screen bg-[#f8fafc] p-4 md:p-6 font-sans text-slate-800">
+            {/* Header */}
+            <header className="max-w-7xl mx-auto mb-6 bg-white p-6 rounded-[32px] shadow-sm flex flex-col md:flex-row justify-between items-center gap-6 border border-slate-200">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    </div>
+                    <div>
+                        <h1 className="text-xl font-black uppercase tracking-tight leading-none">ЦСОП "Леда Милева"</h1>
+                        <div className="flex gap-3 mt-2">
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 py-0.5 bg-slate-100 rounded-md italic">{selectedYear}</span>
+                            <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest px-2 py-0.5 bg-indigo-50 rounded-md italic">{selectedTerm} Срок</span>
+                        </div>
                     </div>
                 </div>
-            );
 
-            if (loading) return (
-                <div className="h-screen flex items-center justify-center bg-white flex-col gap-4">
-                    <Icon name="refresh" className="animate-spin text-indigo-600" size={40}/>
-                    <p className="font-black text-slate-400 uppercase tracking-widest text-center px-4">Свързване с облака...</p>
+                <div className="flex bg-slate-100 p-1 rounded-2xl">
+                    {[
+                        {id: 'schedule', label: 'Разписание'},
+                        {id: 'curriculum', label: 'Учебен План'},
+                        {id: 'resources', label: 'Преподаватели и Предмети'},
+                        {id: 'constraints', label: 'Забрани'}
+                    ].map(t => (
+                        <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === t.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                            {t.label}
+                        </button>
+                    ))}
                 </div>
-            );
+            </header>
 
-            return (
-                <div className="min-h-screen p-4 md:p-8">
-                    <header className="bg-white p-6 rounded-[32px] shadow-sm flex flex-col md:flex-row justify-between items-center mb-8 border border-slate-100">
-                        <div className="flex items-center gap-4">
-                            <div className="bg-indigo-600 p-3 rounded-2xl text-white shadow-lg shadow-indigo-100">
-                                <Icon name="graduation" />
-                            </div>
-                            <div>
-                                <h1 className="font-black uppercase text-slate-800 tracking-tight leading-none mb-1">ЦСОП "Леда Милева"</h1>
-                                <div className="flex items-center gap-2">
-                                    <span className={`w-2 h-2 rounded-full ${syncing ? 'bg-amber-400 animate-ping' : 'bg-emerald-500'}`}></span>
-                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Облак: {syncing ? 'Запис...' : 'Активен'}</span>
+            <main className="max-w-7xl mx-auto">
+                {/* ТАБ УЧЕБЕН ПЛАН */}
+                {activeTab === 'curriculum' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-1 bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 h-fit sticky top-6">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">
+                                <span className="w-2 h-6 bg-indigo-600 rounded-full inline-block"></span>
+                                Добави в план
+                            </h2>
+                            <div className="space-y-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Избери Паралелка</label>
+                                    <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500 transition-all">
+                                        {data.classes.map(c => <option key={c}>{c}</option>)}
+                                    </select>
                                 </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Преподавател</label>
+                                    <select id="addT" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100">
+                                        {data.teachers.map(t => <option key={t}>{t}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Предмет</label>
+                                    <select id="addS" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100">
+                                        {data.subjects.map(s => <option key={s}>{s}</option>)}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Брой часове</label>
+                                    <input id="addH" type="number" defaultValue="1" min="1" className="w-full p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100" />
+                                </div>
+                                <button onClick={() => addCurriculumEntry(document.getElementById('addT').value, document.getElementById('addS').value, document.getElementById('addH').value)} className="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black uppercase text-[11px] shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all mt-4">
+                                    Добави запис в плана
+                                </button>
+                                {selectedTerm === 1 && (
+                                    <button onClick={copyToSecondTerm} className="w-full bg-emerald-50 text-emerald-600 p-4 rounded-2xl font-black uppercase text-[10px] border border-emerald-100 mt-2 hover:bg-emerald-100 transition-colors">
+                                        Копирай I към II срок
+                                    </button>
+                                )}
                             </div>
                         </div>
-                        <nav className="flex bg-slate-100 p-1 rounded-2xl mt-4 md:mt-0">
-                            {['schedule', 'curriculum', 'teachers'].map(t => (
-                                <button key={t} onClick={() => setActiveTab(t)} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === t ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>
-                                    {t === 'schedule' ? 'ГРАФИК' : t === 'curriculum' ? 'ПЛАН' : 'УЧИТЕЛИ'}
-                                </button>
-                            ))}
-                        </nav>
-                    </header>
 
-                    <main className="max-w-7xl mx-auto">
-                        {activeTab === 'schedule' && (
-                            <div className="bg-white rounded-[40px] border shadow-sm p-8 md:p-12 text-center">
-                                <Icon name="calendar" size={64} className="mx-auto text-slate-100 mb-6"/>
-                                <h2 className="text-xl md:text-2xl font-black text-slate-800 uppercase mb-2">Готово за работа</h2>
-                                <p className="text-slate-400 max-w-md mx-auto mb-8 font-medium text-sm">Приложението е свързано с проекта "generator-razpisanie".</p>
-                                <button className="bg-indigo-600 text-white px-8 md:px-10 py-4 rounded-2xl font-black shadow-xl shadow-indigo-100 hover:scale-105 transition-transform uppercase text-sm">Генерирай разписание</button>
+                        <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 min-h-[600px]">
+                            <div className="flex justify-between items-center mb-8 border-b border-slate-50 pb-6">
+                                <div>
+                                    <h2 className="text-lg font-black uppercase text-slate-800 tracking-tight">Разпределение: {selectedClass}</h2>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Всички записи за текущия срок</p>
+                                </div>
+                                <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                                    <button onClick={() => setSelectedTerm(1)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${selectedTerm === 1 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>I Срок</button>
+                                    <button onClick={() => setSelectedTerm(2)} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${selectedTerm === 2 ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>II Срок</button>
+                                </div>
                             </div>
-                        )}
+                            
+                            <div className="space-y-3">
+                                {(getTermData(selectedYear, selectedTerm)[selectedClass] || []).length === 0 ? (
+                                    <div className="p-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest border-2 border-dashed border-slate-100 rounded-[32px]">Няма добавени записи</div>
+                                ) : (
+                                    (getTermData(selectedYear, selectedTerm)[selectedClass] || []).map((entry, idx) => (
+                                        <div key={entry.id || idx} className="flex items-center justify-between p-6 bg-slate-50 rounded-[28px] border border-transparent hover:border-indigo-100 transition-all group">
+                                            <div className="flex items-center gap-6">
+                                                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm text-indigo-600 font-black">{entry.hours}</div>
+                                                <div>
+                                                    <p className="font-black text-slate-800 uppercase text-xs">{entry.teacher}</p>
+                                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-1">{entry.subject}</p>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => removeCurriculumEntry(entry.id)} className="text-slate-300 hover:text-red-500 transition-colors p-2">
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                            </button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
-                        {activeTab === 'teachers' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* ТАБ БАЗА ДАННИ */}
+                {activeTab === 'resources' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in duration-500">
+                        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">
+                                <span className="w-2 h-6 bg-indigo-600 rounded-full inline-block"></span>
+                                Преподаватели
+                            </h2>
+                            <div className="flex gap-2 mb-6">
+                                <input id="newT" type="text" placeholder="Име на учител..." className="flex-1 p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500" />
+                                <button onClick={() => {
+                                    const val = document.getElementById('newT').value;
+                                    if(val) { updateCloud({...data, teachers: [...data.teachers, val]}); document.getElementById('newT').value = ""; }
+                                }} className="bg-indigo-600 text-white px-6 rounded-2xl font-black text-xl hover:bg-indigo-700 shadow-lg shadow-indigo-100">+</button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2">
                                 {data.teachers.map(t => (
-                                    <div key={t.id} className="bg-white p-5 rounded-3xl border border-slate-100 flex justify-between items-center hover:border-indigo-200 transition-all shadow-sm">
-                                        <div className="font-black text-slate-700 uppercase text-xs tracking-tight">{t.name}</div>
-                                        <Icon name="clock" className="text-slate-300" size={16} />
+                                    <div key={t} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl group hover:bg-white hover:shadow-md transition-all border border-transparent hover:border-slate-100">
+                                        <span className="font-bold text-sm text-slate-700">{t}</span>
+                                        <button onClick={() => updateCloud({...data, teachers: data.teachers.filter(x => x !== t)})} className="text-slate-200 hover:text-red-500 transition-all p-2">Изтрий</button>
                                     </div>
                                 ))}
                             </div>
-                        )}
-                    </main>
-                    
-                    <footer className="mt-12 text-center">
-                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em]">ЦСОП "Леда Милева" v1.0</p>
-                    </footer>
-                </div>
-            );
-        }
+                        </div>
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                        <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200">
+                            <h2 className="text-lg font-black uppercase mb-6 text-indigo-600 flex items-center gap-2">
+                                <span className="w-2 h-6 bg-indigo-600 rounded-full inline-block"></span>
+                                Предмети
+                            </h2>
+                            <div className="flex gap-2 mb-6">
+                                <input id="newS" type="text" placeholder="Име на предмет..." className="flex-1 p-4 bg-slate-50 rounded-2xl border-none font-bold text-sm outline-none ring-1 ring-slate-100 focus:ring-indigo-500" />
+                                <button onClick={() => {
+                                    const val = document.getElementById('newS').value;
+                                    if(val) { updateCloud({...data, subjects: [...data.subjects, val]}); document.getElementById('newS').value = ""; }
+                                }} className="bg-indigo-600 text-white px-6 rounded-2xl font-black text-xl hover:bg-indigo-700 shadow-lg shadow-indigo-100">+</button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2">
+                                {data.subjects.map(s => (
+                                    <div key={s} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl group hover:bg-white hover:shadow-md transition-all border border-transparent hover:border-slate-100">
+                                        <span className="font-bold text-sm text-slate-700">{s}</span>
+                                        <button onClick={() => updateCloud({...data, subjects: data.subjects.filter(x => x !== s)})} className="text-slate-200 hover:text-red-500 transition-all p-2">Изтрий</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ТАБ РАЗПИСАНИЕ */}
+                {activeTab === 'schedule' && (
+                    <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-200 animate-in fade-in duration-700">
+                        <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-6">
+                            <div>
+                                <h2 className="text-2xl font-black uppercase tracking-tight">График на часовете</h2>
+                                <div className="flex gap-4 mt-2">
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[9px] font-black text-slate-300 uppercase mr-1 italic">Срок:</span>
+                                        <select value={selectedTerm} onChange={e => setSelectedTerm(parseInt(e.target.value))} className="bg-indigo-50 text-indigo-600 border-none rounded-lg text-[10px] font-black uppercase px-3 py-1 outline-none">
+                                            <option value={1}>Първи</option>
+                                            <option value={2}>Втори</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[9px] font-black text-slate-300 uppercase mr-1 italic">Клас:</span>
+                                        <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="bg-slate-100 text-slate-600 border-none rounded-lg text-[10px] font-black uppercase px-3 py-1 outline-none">
+                                            {data.classes.map(c => <option key={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={generateSchedule} className="bg-indigo-600 text-white px-10 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-3">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                Генерирай Глобално Разписание
+                            </button>
+                        </div>
+
+                        <div className="overflow-x-auto rounded-[40px] border border-slate-100 bg-slate-50 p-6 shadow-inner">
+                            <div className="min-w-[1000px]">
+                                <div className="grid grid-cols-[80px_repeat(5,1fr)] gap-4 mb-6 px-4">
+                                    <div className="p-2"></div>
+                                    {DAYS.map(d => <div key={d} className="p-5 bg-white rounded-3xl text-center font-black text-[11px] uppercase tracking-widest shadow-sm text-slate-400 border border-slate-100">{d}</div>)}
+                                </div>
+                                {PERIODS.map(p => (
+                                    <div key={p} className="grid grid-cols-[80px_repeat(5,1fr)] gap-4 mb-4 px-4">
+                                        <div className="flex items-center justify-center font-black text-slate-200 text-3xl italic tracking-tighter">{p}</div>
+                                        {DAYS.map(d => {
+                                            const cell = data.schedule[selectedYear]?.[selectedTerm]?.[selectedClass]?.[`${d}-${p}`];
+                                            return (
+                                                <div key={d} className={`min-h-[120px] rounded-[36px] p-5 flex flex-col justify-center items-center text-center transition-all border-2 ${cell ? 'bg-white border-white shadow-lg scale-[1.02]' : 'bg-transparent border-dashed border-slate-200 opacity-40'}`}>
+                                                    {cell ? (
+                                                        <>
+                                                            <div className="bg-indigo-50 text-indigo-600 text-[9px] font-black px-4 py-1.5 rounded-full mb-3 uppercase tracking-tighter">
+                                                                {cell.subject}
+                                                            </div>
+                                                            <div className="font-bold text-slate-700 text-[11px] uppercase leading-tight px-1">
+                                                                {cell.teacher}
+                                                            </div>
+                                                        </>
+                                                    ) : (
+                                                        <div className="text-[8px] font-black text-slate-100 uppercase tracking-[0.2em]">Свободно</div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ТАБ ЗАБРАНИ */}
+                {activeTab === 'constraints' && (
+                    <div className="max-w-2xl mx-auto animate-in slide-in-from-bottom-8 duration-500">
+                        <div className="bg-red-50 p-10 rounded-[48px] border border-red-100 mb-8 shadow-inner">
+                            <h2 className="text-xl font-black mb-8 uppercase text-red-800 text-center tracking-tight">Лична забрана за преподавател</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-black text-red-300 uppercase ml-2">Преподавател</label>
+                                    <select id="conT" className="w-full p-4 rounded-2xl font-bold bg-white text-xs border-none shadow-sm">{data.teachers.map(t => <option key={t}>{t}</option>)}</select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-black text-red-300 uppercase ml-2">Ден</label>
+                                    <select id="conD" className="w-full p-4 rounded-2xl font-bold bg-white text-xs border-none shadow-sm">{DAYS.map(d => <option key={d}>{d}</option>)}</select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-black text-red-300 uppercase ml-2">Час</label>
+                                    <select id="conP" className="w-full p-4 rounded-2xl font-bold bg-white text-xs border-none shadow-sm">{PERIODS.map(p => <option key={p} value={p}>{p}-ти час</option>)}</select>
+                                </div>
+                            </div>
+                            <button onClick={() => {
+                                const t = document.getElementById('conT').value;
+                                const d = document.getElementById('conD').value;
+                                const p = document.getElementById('conP').value;
+                                updateCloud({...data, constraints: [...data.constraints, {teacher: t, day: d, period: p}]});
+                            }} className="w-full mt-6 bg-red-600 text-white p-5 rounded-2xl font-black uppercase text-[11px] shadow-xl shadow-red-200 hover:bg-red-700 transition-all tracking-widest">Добави в списъка със забрани</button>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            {data.constraints.length === 0 && <p className="text-center text-slate-300 font-bold uppercase text-[10px] py-10">Няма активни забрани</p>}
+                            {data.constraints.map((c, i) => (
+                                <div key={i} className="bg-white p-6 rounded-[32px] border border-slate-100 flex justify-between items-center group hover:shadow-md transition-all">
+                                    <div className="flex items-center gap-5">
+                                        <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center text-red-400 font-black text-xl italic shadow-sm">!</div>
+                                        <div>
+                                            <p className="font-black text-slate-800 uppercase text-xs leading-none">{c.teacher}</p>
+                                            <p className="text-[10px] font-bold text-red-400 uppercase tracking-widest mt-2">{c.day} • {c.period} час</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => updateCloud({...data, constraints: data.constraints.filter((_, idx) => idx !== i)})} className="text-slate-200 hover:text-red-500 font-black text-[10px] uppercase transition-colors p-2">Премахни</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </main>
+            
+            <footer className="max-w-7xl mx-auto mt-16 text-center pb-12">
+                <p className="text-[9px] font-black uppercase tracking-[0.8em] text-slate-300">CSOP Leda Mileva • Professional ERP • AI Scheduler v4.2</p>
+            </footer>
+        </div>
+    );
+}
