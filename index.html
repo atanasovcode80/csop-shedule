@@ -39,7 +39,6 @@
         .editable-cell { cursor: pointer; transition: all 0.2s; }
         .editable-cell:hover { background-color: #f1f5f9; }
 
-        /* Скриване на скролбара за мобилното меню, но запазване на функционалността */
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
@@ -48,19 +47,15 @@
     <div id="root"></div>
 
     <script type="module">
-        // 1. Firebase Imports (Modular SDK v11)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-        
-        // Expose to window for React to use
         window.FB_SDK = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, getFirestore, doc, setDoc, onSnapshot };
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyDWXdHvh1AHGNHElup-3-Kukaadz8uSGWg",
             authDomain: "generator-razpisanie.firebaseapp.com",
@@ -72,9 +67,8 @@
         };
         const APP_ID = "csop-leda-mileva-prod";
         const DAYS_BG = ['Понеделник', 'Вторник', 'Сряда', 'Четвъртък', 'Петък'];
-        const AVAILABLE_YEARS = ['2024/2025', '2025/2026', '2026/2027', '2027/2028', '2028/2029'];
+        const AVAILABLE_YEARS = ['2024/2025', '2025/2026', '2026/2027', '2027/2028', '2028/2029', '2029/2030'];
 
-        // СПИСЪЦИ ЗА АВТОМАТИЧНО ДОБАВЯНЕ (Извлечени от снимките)
         const PREDEFINED_TEACHERS = [
             "Милена Рачовска", "Калинка Илиева", "Галя Ненчева", "Петринка Нанова", 
             "Цветанка Брайкова", "Тони Иванов", "Цветанка Михайлова", "Огнян Йорданов", 
@@ -102,51 +96,64 @@
             "Консултиране на родители, деца и ученици и водене на задължителна документация"
         ];
 
+        // Функция за автоматично определяне на година и срок
+        const getInitialAcademicInfo = () => {
+            const d = new Date();
+            const m = d.getMonth(); 
+            const y = d.getFullYear();
+            let year, term;
+            
+            if (m >= 8) { 
+                year = `${y}/${y+1}`;
+                term = '1';
+            } else if (m === 0) { 
+                year = `${y-1}/${y}`;
+                term = '1';
+            } else { 
+                year = `${y-1}/${y}`;
+                term = '2';
+            }
+            if (!AVAILABLE_YEARS.includes(year)) year = '2025/2026'; 
+            
+            return { year, term };
+        };
+
         function App() {
-            // Аутентикация с парола
+            const initInfo = getInitialAcademicInfo();
+            
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [passwordInput, setPasswordInput] = useState('');
+            const [loginError, setLoginError] = useState('');
 
             const [user, setUser] = useState(null);
             const [ready, setReady] = useState(false);
             const [activeTab, setActiveTab] = useState('schedule'); 
-            const [term, setTerm] = useState('1'); 
-            const [schoolYear, setSchoolYear] = useState('2025/2026');
+            const [term, setTerm] = useState(initInfo.term); 
+            const [schoolYear, setSchoolYear] = useState(initInfo.year);
             
-            // Основен стейт за данните
-            const [data, setData] = useState({
-                yearlyData: {} // Всичко вече се съхранява вътре по години!
-            });
+            const [data, setData] = useState({ yearlyData: {} });
 
-            // Локални стейтове за форми
             const [selectedClass, setSelectedClass] = useState('');
             const [curForm, setCurForm] = useState({ id: '', tId: '', sub: '', hours: 1 });
             const [editingItemId, setEditingItemId] = useState(null); 
             const [condForm, setCondForm] = useState({ tId: '', day: '0', hour: '1' });
+            
             const [newTeacher, setNewTeacher] = useState('');
             const [newSubject, setNewSubject] = useState('');
             const [newClass, setNewClass] = useState('');
             const [toastMessage, setToastMessage] = useState('');
 
-            // Стейт за ръчна редакция на разписанието (Модален прозорец)
-            const [manualEditModal, setManualEditModal] = useState({
-                isOpen: false,
-                cls: '',
-                day: 0,
-                hour: 0,
-                sub: '',
-                tId: ''
-            });
+            const [systemModal, setSystemModal] = useState({ isOpen: false, title: '', message: '', type: 'info', onConfirm: null });
+            const [manualEditModal, setManualEditModal] = useState({ isOpen: false, cls: '', day: 0, hour: 0, sub: '', tId: '' });
+            const [editStringModal, setEditStringModal] = useState({ isOpen: false, type: '', id: '', oldVal: '', newVal: '' });
+            const [assignSubModal, setAssignSubModal] = useState({ isOpen: false, subject: '', selectedClasses: [] });
 
-            // Refs за Drag and Drop на класовете
             const dragClassItem = useRef();
             const dragClassOverItem = useRef();
 
-            // ХЕЛПЕРИ ЗА ИЗВЛИЧАНЕ НА ДАННИТЕ ЗА ТЕКУЩАТА ГОДИНА
             const safeYearlyData = data.yearlyData || {};
             const currentYearData = safeYearlyData[schoolYear] || {};
             
-            // Динамично извличане на номенклатурите и разписанията (ако няма, връщаме празен масив/обект)
             const currentClasses = currentYearData.classes || [];
             const currentTeachers = currentYearData.teachers || [];
             const currentSubjects = currentYearData.subjects || [];
@@ -154,25 +161,22 @@
             const currentCurriculum = currentYearData.curriculum || { '1': {}, '2': {} };
             const currentSchedules = currentYearData.schedules || { '1': {}, '2': {} };
 
-            // Изчистване на формата за редакция при смяна на клас, срок или година
             useEffect(() => {
                 setCurForm({ id: '', tId: '', sub: '', hours: 1 });
                 setEditingItemId(null);
             }, [selectedClass, term, schoolYear]);
 
-            // --- АВТОМАТИЧНО ОТПИСВАНЕ (60 минути неактивност) ---
+            // Auto-logout
             useEffect(() => {
                 let inactivityTimeout;
-                
                 const logout = () => {
                     setIsLoggedIn(false);
                     setPasswordInput('');
-                    alert("Сесията Ви изтече поради липса на активност в продължение на 60 минути.");
+                    setSystemModal({ isOpen: true, type: 'info', title: 'Сесията изтече', message: 'Бяхте отписани автоматично поради 60 минути липса на активност.', onConfirm: null });
                 };
-
                 const resetTimer = () => {
                     clearTimeout(inactivityTimeout);
-                    inactivityTimeout = setTimeout(logout, 3600000); // 60 min
+                    inactivityTimeout = setTimeout(logout, 3600000); 
                 };
 
                 if (isLoggedIn) {
@@ -182,7 +186,6 @@
                     window.addEventListener('click', resetTimer);
                     window.addEventListener('scroll', resetTimer);
                 }
-
                 return () => {
                     clearTimeout(inactivityTimeout);
                     window.removeEventListener('mousemove', resetTimer);
@@ -192,13 +195,10 @@
                 };
             }, [isLoggedIn]);
 
-            // --- 1. FIREBASE INITIALIZATION & SYNC ---
+            // Firebase Init
             useEffect(() => {
                 const initFirebase = async () => {
-                    if (!window.FB_SDK) {
-                        setTimeout(initFirebase, 100);
-                        return;
-                    }
+                    if (!window.FB_SDK) return setTimeout(initFirebase, 100);
                     try {
                         const app = window.FB_SDK.initializeApp(firebaseConfig);
                         const auth = window.FB_SDK.getAuth(app);
@@ -215,39 +215,24 @@
                                         const dbData = snap.data();
                                         let updatedYearlyData = dbData.yearlyData || {};
                                         
-                                        // МИГРАЦИЯ: Ако потребителят има стари данни в общи променливи, ги прехвърляме в 2025/2026
                                         if (!updatedYearlyData['2025/2026']) {
                                             updatedYearlyData['2025/2026'] = {
-                                                classes: dbData.classes || [],
-                                                teachers: dbData.teachers || [],
-                                                subjects: dbData.subjects || [],
-                                                conditions: dbData.conditions || [],
-                                                curriculum: dbData.curriculum || { '1': {}, '2': {} },
-                                                schedules: dbData.schedules || { '1': {}, '2': {} }
+                                                classes: dbData.classes || [], teachers: dbData.teachers || [],
+                                                subjects: dbData.subjects || [], conditions: dbData.conditions || [],
+                                                curriculum: dbData.curriculum || { '1': {}, '2': {} }, schedules: dbData.schedules || { '1': {}, '2': {} }
                                             };
-                                        } else {
-                                            // Гарантиране, че ако липсват масиви, ще се създадат
-                                            if (!updatedYearlyData['2025/2026'].classes) updatedYearlyData['2025/2026'].classes = dbData.classes || [];
-                                            if (!updatedYearlyData['2025/2026'].teachers) updatedYearlyData['2025/2026'].teachers = dbData.teachers || [];
-                                            if (!updatedYearlyData['2025/2026'].subjects) updatedYearlyData['2025/2026'].subjects = dbData.subjects || [];
-                                            if (!updatedYearlyData['2025/2026'].conditions) updatedYearlyData['2025/2026'].conditions = dbData.conditions || [];
                                         }
 
-                                        // АВТОМАТИЧНО ДОБАВЯНЕ НА НОВИТЕ УЧИТЕЛИ И ПРЕДМЕТИ (САМО ВЕДНЪЖ)
                                         let needsSave = false;
-                                        if (!dbData.predefinedAdded_v3) {
+                                        if (!dbData.predefinedAdded_v4) {
                                             const cy = '2025/2026';
-                                            
                                             PREDEFINED_TEACHERS.forEach((pt, i) => {
-                                                // Проверяваме дали учителят вече не съществува
                                                 if (!updatedYearlyData[cy].teachers.some(t => t.name === pt)) {
                                                     updatedYearlyData[cy].teachers.push({ id: `predef_t_${Date.now()}_${i}`, name: pt });
                                                     needsSave = true;
                                                 }
                                             });
-
                                             PREDEFINED_SUBJECTS.forEach(ps => {
-                                                // Проверяваме дали предметът вече не съществува
                                                 if (!updatedYearlyData[cy].subjects.includes(ps)) {
                                                     updatedYearlyData[cy].subjects.push(ps);
                                                     needsSave = true;
@@ -256,56 +241,39 @@
                                         }
 
                                         if (needsSave && window.FB_SDK) {
-                                            // Ако сме добавили нови елементи, веднага запазваме в базата с флаг predefinedAdded_v3: true, 
-                                            // за да не се добавят втори път (дори ако потребителят ги изтрие).
                                             const appSave = window.FB_SDK.initializeApp(firebaseConfig);
                                             const dbSave = window.FB_SDK.getFirestore(appSave);
-                                            const docRefSave = window.FB_SDK.doc(dbSave, 'artifacts', APP_ID, 'public', 'data', 'school', 'master');
-                                            window.FB_SDK.setDoc(docRefSave, { ...dbData, yearlyData: updatedYearlyData, predefinedAdded_v3: true }, { merge: true });
-                                            return; // Спираме тук, понеже записът ще предизвика ново извикване на onSnapshot
+                                            window.FB_SDK.setDoc(window.FB_SDK.doc(dbSave, 'artifacts', APP_ID, 'public', 'data', 'school', 'master'), { ...dbData, yearlyData: updatedYearlyData, predefinedAdded_v4: true }, { merge: true });
+                                            return; 
                                         }
-
                                         setData({ yearlyData: updatedYearlyData });
                                     } else {
-                                        // Ако няма документ изобщо (чисто нова база)
                                         setData({ yearlyData: { '2025/2026': { classes: [], teachers: [], subjects: [], conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } } } });
                                     }
                                     setReady(true);
                                 }, (error) => {
-                                    console.error("Грешка при четене от Firebase:", error);
-                                    showToast("Проблем с връзката към базата данни!");
+                                    setSystemModal({ isOpen: true, type: 'error', title: 'Грешка', message: 'Проблем с връзката към базата данни.' });
                                     setReady(true);
                                 });
                             }
                         });
-                    } catch (error) {
-                        console.error("Firebase Init Error:", error);
-                    }
+                    } catch (error) { console.error("Firebase Init Error", error); }
                 };
                 initFirebase();
             }, []);
 
-            // Запазване
             const saveData = async (updatedData) => {
                 if (!user || !window.FB_SDK) return;
                 try {
                     const app = window.FB_SDK.initializeApp(firebaseConfig);
                     const db = window.FB_SDK.getFirestore(app);
-                    const docRef = window.FB_SDK.doc(db, 'artifacts', APP_ID, 'public', 'data', 'school', 'master');
-                    await window.FB_SDK.setDoc(docRef, updatedData, { merge: true });
+                    await window.FB_SDK.setDoc(window.FB_SDK.doc(db, 'artifacts', APP_ID, 'public', 'data', 'school', 'master'), updatedData, { merge: true });
                     setData(updatedData);
-                } catch (error) {
-                    console.error("Грешка при запис:", error);
-                    showToast("Грешка при запазване!");
-                }
+                } catch (error) { showToast("Грешка при запазване!"); }
             };
 
-            const updateDataField = (field, value) => {
-                const newData = { ...data, [field]: value };
-                saveData(newData);
-            };
+            const updateDataField = (field, value) => { saveData({ ...data, [field]: value }); };
 
-            // ФУНКЦИЯ ЗА ЗАПИС В КОНКРЕТНА ГОДИНА
             const updateYearlyDataField = (type, newYearData) => {
                 const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
                 if (!newYearlyData[schoolYear]) {
@@ -315,99 +283,154 @@
                 updateDataField('yearlyData', newYearlyData);
             };
 
-            const showToast = (msg) => {
-                setToastMessage(msg);
-                setTimeout(() => setToastMessage(''), 3000);
+            const updateMultipleYearlyFields = (updatesObj) => {
+                const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
+                if (!newYearlyData[schoolYear]) newYearlyData[schoolYear] = { classes: [], teachers: [], subjects: [], conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} } };
+                Object.keys(updatesObj).forEach(key => { newYearlyData[schoolYear][key] = updatesObj[key]; });
+                updateDataField('yearlyData', newYearlyData);
             };
 
-            // Обработка на вход
+            const showToast = (msg) => { setToastMessage(msg); setTimeout(() => setToastMessage(''), 3000); };
+
             const handleLogin = (e) => {
                 e.preventDefault();
-                if (passwordInput === '1500510') {
-                    setIsLoggedIn(true);
-                } else {
-                    alert("Грешна парола!");
-                    setPasswordInput('');
-                }
+                if (passwordInput === '1500510') { setIsLoggedIn(true); setLoginError(''); } 
+                else { setLoginError("Грешна парола! Моля, опитайте отново."); setPasswordInput(''); }
             };
 
             const handleLogout = () => {
-                setIsLoggedIn(false);
-                setPasswordInput('');
+                setSystemModal({
+                    isOpen: true, type: 'confirm', title: 'Потвърждение за изход', message: 'Сигурни ли сте, че искате да излезете от системата?',
+                    onConfirm: () => { setIsLoggedIn(false); setPasswordInput(''); }
+                });
             };
 
-            // Обработка на превключване на Учебна Година
             const handleSchoolYearChange = (e) => {
                 const newYear = e.target.value;
                 if (!data.yearlyData || !data.yearlyData[newYear]) {
-                    // Ако тази година се отваря за първи път, КОПИРАМЕ номенклатурите от предишната, за да е по-лесно
                     const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
                     newYearlyData[newYear] = {
-                        classes: [...currentClasses],
-                        teachers: [...currentTeachers],
-                        subjects: [...currentSubjects],
-                        conditions: [...currentConditions],
-                        curriculum: { '1': {}, '2': {} },
-                        schedules: { '1': {}, '2': {} }
+                        classes: [...currentClasses], teachers: [...currentTeachers], subjects: [...currentSubjects],
+                        conditions: [...currentConditions], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} }
                     };
                     updateDataField('yearlyData', newYearlyData);
                 }
                 setSchoolYear(newYear);
-                setSelectedClass(''); // Изчистваме избрания клас
+                setSelectedClass(''); 
             };
 
-            // Функции за Drag and Drop на класовете
-            const dragClassStart = (e, position) => {
-                dragClassItem.current = position;
+            const handleRenameSave = () => {
+                const { type, id, oldVal, newVal } = editStringModal;
+                if (!newVal || oldVal === newVal) return setEditStringModal({ isOpen: false, type: '', id: '', oldVal: '', newVal: '' });
+
+                if (type === 'teacher') {
+                    const newTeachers = currentTeachers.map(t => t.id === id ? { ...t, name: newVal } : t);
+                    updateYearlyDataField('teachers', newTeachers);
+                    showToast("Името на преподавателя е обновено!");
+                } 
+                else if (type === 'class') {
+                    if (currentClasses.includes(newVal)) return setSystemModal({isOpen: true, type: 'error', title: 'Грешка', message: 'Вече съществува паралелка с това име!'});
+                    const newClasses = currentClasses.map(c => c === oldVal ? newVal : c);
+                    const newCur = JSON.parse(JSON.stringify(currentCurriculum));
+                    const newSched = JSON.parse(JSON.stringify(currentSchedules));
+
+                    if (newCur['1'][oldVal]) { newCur['1'][newVal] = newCur['1'][oldVal]; delete newCur['1'][oldVal]; }
+                    if (newCur['2'][oldVal]) { newCur['2'][newVal] = newCur['2'][oldVal]; delete newCur['2'][oldVal]; }
+                    if (newSched['1'][oldVal]) { newSched['1'][newVal] = newSched['1'][oldVal]; delete newSched['1'][oldVal]; }
+                    if (newSched['2'][oldVal]) { newSched['2'][newVal] = newSched['2'][oldVal]; delete newSched['2'][oldVal]; }
+
+                    updateMultipleYearlyFields({ classes: newClasses, curriculum: newCur, schedules: newSched });
+                    if(selectedClass === oldVal) setSelectedClass(newVal);
+                    showToast("Паралелката е преименувана успешно!");
+                }
+                setEditStringModal({ isOpen: false, type: '', id: '', oldVal: '', newVal: '' });
             };
 
-            const dragClassEnter = (e, position) => {
-                dragClassOverItem.current = position;
+            const handleAssignSubjectSave = () => {
+                if (assignSubModal.selectedClasses.length === 0) return setSystemModal({ isOpen: true, type: 'error', title: 'Внимание', message: 'Моля, изберете поне една паралелка.' });
+                const newCur = JSON.parse(JSON.stringify(currentCurriculum));
+                assignSubModal.selectedClasses.forEach((cls, i) => {
+                    if(!newCur[term][cls]) newCur[term][cls] = [];
+                    if (!newCur[term][cls].some(item => item.sub === assignSubModal.subject)) {
+                        newCur[term][cls].push({ id: `batch_${Date.now()}_${i}`, tId: '', sub: assignSubModal.subject, hours: 1 });
+                    }
+                });
+                updateYearlyDataField('curriculum', newCur);
+                setAssignSubModal({ isOpen: false, subject: '', selectedClasses: [] });
+                showToast("Предметът е разпределен в учебните планове!");
             };
 
+            const handleCreateNewYear = () => {
+                const nextYearIndex = AVAILABLE_YEARS.indexOf(schoolYear) + 1;
+                const nextYearName = AVAILABLE_YEARS[nextYearIndex];
+                if (!nextYearName) return setSystemModal({isOpen: true, type: 'error', title: 'Ограничение', message: 'Няма повече налични години в системата за добавяне.'});
+                if (data.yearlyData && data.yearlyData[nextYearName]) return setSystemModal({isOpen: true, type: 'info', title: 'Информация', message: `Учебна година ${nextYearName} вече съществува. Можете да я изберете от менюто горе.`});
+
+                setSystemModal({
+                    isOpen: true, type: 'confirm', title: 'Нова Учебна Година', 
+                    message: `Сигурни ли сте, че искате да създадете учебна ${nextYearName} година? Ще бъдат прехвърлени само преподавателите и предметите от текущата.`,
+                    onConfirm: () => {
+                        const newYearlyData = JSON.parse(JSON.stringify(data.yearlyData || {}));
+                        newYearlyData[nextYearName] = {
+                            classes: [], teachers: [...currentTeachers], subjects: [...currentSubjects],
+                            conditions: [], curriculum: { '1': {}, '2': {} }, schedules: { '1': {}, '2': {} }
+                        };
+                        updateDataField('yearlyData', newYearlyData);
+                        setSchoolYear(nextYearName); setTerm('1'); setSelectedClass('');
+                        showToast(`Успешно преминахте в ${nextYearName} г.!`);
+                    }
+                });
+            };
+
+            // Функции за Drag and Drop
+            const dragClassStart = (e, position) => { dragClassItem.current = position; };
+            const dragClassEnter = (e, position) => { dragClassOverItem.current = position; };
+            const dragClassOver = (e) => { e.preventDefault(); };
             const dropClass = (e) => {
                 e.preventDefault();
                 if (dragClassItem.current === null || dragClassOverItem.current === null) return;
-                
                 const copyListItems = [...currentClasses];
                 const dragItemContent = copyListItems[dragClassItem.current];
                 copyListItems.splice(dragClassItem.current, 1);
                 copyListItems.splice(dragClassOverItem.current, 0, dragItemContent);
-                
-                dragClassItem.current = null;
-                dragClassOverItem.current = null;
-                
+                dragClassItem.current = null; dragClassOverItem.current = null;
                 updateYearlyDataField('classes', copyListItems);
             };
 
-            const dragClassOver = (e) => {
-                e.preventDefault();
+            const handleClearSchedule = () => {
+                setSystemModal({
+                    isOpen: true, type: 'confirm', title: 'Изчистване на разписание',
+                    message: `Сигурни ли сте, че искате да изчистите разписанието за Срок ${term}? Всички генерирани и ръчно въведени часове ще бъдат изтрити!`,
+                    onConfirm: () => {
+                        const newSchedulesAll = JSON.parse(JSON.stringify(currentSchedules));
+                        newSchedulesAll[term] = {};
+                        updateYearlyDataField('schedules', newSchedulesAll);
+                        showToast("Разписанието е изчистено!");
+                    }
+                });
             };
 
-            // --- 2. ЛОГИКА ЗА ГЕНЕРИРАНЕ НА РАЗПИСАНИЕ ---
+            // ГЕНЕРАТОР (Надграден - запазва вече попълнените и допълва)
             const generateSchedule = () => {
-                showToast("Генериране на разписание...");
-                
+                showToast("Допълване на разписание...");
                 const currentTerm = term;
                 const newSchedulesAll = JSON.parse(JSON.stringify(currentSchedules));
-                newSchedulesAll[currentTerm] = {}; 
+                if (!newSchedulesAll[currentTerm]) newSchedulesAll[currentTerm] = {}; 
 
-                const sortedClasses = [...currentClasses]; // Точно в реда от База Данни
+                const sortedClasses = [...currentClasses]; 
 
                 const isTeacherBusy = (day, hour, tId) => {
+                    if (!tId) return false; 
                     const isBlocked = currentConditions.some(c => {
                         if (c.tId === tId && parseInt(c.day) === day) {
-                            if (c.hour === 'all') return true;
-                            if (parseInt(c.hour) === hour) return true;
+                            if (c.hour === 'all' || parseInt(c.hour) === hour) return true;
                         }
                         return false;
                     });
                     if (isBlocked) return true;
 
                     for (let cls in newSchedulesAll[currentTerm]) {
-                        if (newSchedulesAll[currentTerm][cls][day] && 
-                            newSchedulesAll[currentTerm][cls][day][hour] && 
-                            newSchedulesAll[currentTerm][cls][day][hour].tId === tId) {
+                        if (newSchedulesAll[currentTerm][cls][day] && newSchedulesAll[currentTerm][cls][day][hour] && newSchedulesAll[currentTerm][cls][day][hour].tId === tId) {
                             return true;
                         }
                     }
@@ -415,37 +438,51 @@
                 };
 
                 const hasSubjectToday = (day, sub, clsSched) => {
-                    for(let h=1; h<=7; h++) {
-                        if(clsSched[day] && clsSched[day][h] && clsSched[day][h].sub === sub) return true;
-                    }
+                    for(let h=1; h<=6; h++) { if(clsSched[day] && clsSched[day][h] && clsSched[day][h].sub === sub) return true; }
                     return false;
                 };
 
                 sortedClasses.forEach(cls => {
-                    newSchedulesAll[currentTerm][cls] = { 0:{}, 1:{}, 2:{}, 3:{}, 4:{} };
+                    if (!newSchedulesAll[currentTerm][cls]) {
+                        newSchedulesAll[currentTerm][cls] = { 0:{}, 1:{}, 2:{}, 3:{}, 4:{} };
+                    }
+                    const clsSched = newSchedulesAll[currentTerm][cls];
                     const plan = currentCurriculum[currentTerm][cls] || [];
                     
+                    // Изчисляване на вече разпределените часове
+                    let placedCounts = {};
+                    for(let d=0; d<5; d++) {
+                        for(let h=1; h<=6; h++) {
+                            if (clsSched[d] && clsSched[d][h]) {
+                                const cell = clsSched[d][h];
+                                const key = `${cell.sub}_${cell.tId}`;
+                                placedCounts[key] = (placedCounts[key] || 0) + 1;
+                            }
+                        }
+                    }
+
                     let tasks = [];
                     plan.forEach(item => {
-                        for(let i=0; i<item.hours; i++) {
-                            tasks.push({ sub: item.sub, tId: item.tId });
-                        }
+                        const key = `${item.sub}_${item.tId}`;
+                        const placed = placedCounts[key] || 0;
+                        const remaining = Math.max(0, item.hours - placed);
+                        for(let i=0; i<remaining; i++) tasks.push({ sub: item.sub, tId: item.tId });
                     });
-
                     tasks.sort(() => Math.random() - 0.5);
 
                     tasks.forEach(task => {
                         let placed = false;
-                        let clsSched = newSchedulesAll[currentTerm][cls];
-
                         const tryPlace = (startH, endH, allowSameSubject) => {
                             for(let h=startH; h<=endH; h++) {
                                 let randomDays = [0,1,2,3,4].sort(() => Math.random() - 0.5); 
                                 for(let d of randomDays) {
-                                    if (!clsSched[d][h] && !isTeacherBusy(d, h, task.tId)) {
-                                        if (allowSameSubject || !hasSubjectToday(d, task.sub, clsSched)) {
-                                            clsSched[d][h] = task;
-                                            return true;
+                                    if (!clsSched[d] || !clsSched[d][h]) { // Проверка само в ПРАЗНИ слотове
+                                        if (!isTeacherBusy(d, h, task.tId)) {
+                                            if (allowSameSubject || !hasSubjectToday(d, task.sub, clsSched)) {
+                                                if(!clsSched[d]) clsSched[d] = {};
+                                                clsSched[d][h] = task;
+                                                return true;
+                                            }
                                         }
                                     }
                                 }
@@ -454,28 +491,20 @@
                         };
 
                         placed = tryPlace(1, 5, false);
-                        if (!placed) placed = tryPlace(6, 7, false);
+                        if (!placed) placed = tryPlace(6, 6, false);
                         if (!placed) placed = tryPlace(1, 5, true);
-                        if (!placed) placed = tryPlace(6, 7, true);
-
-                        if (!placed) {
-                            console.log(`Неуспешно разпределяне: ${task.sub} за ${cls}`);
-                        }
+                        if (!placed) placed = tryPlace(6, 6, true);
                     });
                 });
 
                 updateYearlyDataField('schedules', newSchedulesAll);
-                showToast("Разписанието е генерирано и оптимизирано!");
+                showToast("Разписанието е допълнено успешно!");
             };
 
-            // --- РЪЧНА РЕДАКЦИЯ НА КЛЕТКА ---
             const handleCellDoubleClick = (cls, day, hour) => {
                 const existingCell = currentSchedules[term]?.[cls]?.[day]?.[hour];
                 setManualEditModal({
-                    isOpen: true,
-                    cls: cls,
-                    day: day,
-                    hour: hour,
+                    isOpen: true, cls: cls, day: day, hour: hour,
                     sub: existingCell ? existingCell.sub : '',
                     tId: existingCell ? existingCell.tId : ''
                 });
@@ -483,131 +512,126 @@
 
             const saveManualEdit = () => {
                 const newSchedulesAll = JSON.parse(JSON.stringify(currentSchedules));
-                
                 if (!newSchedulesAll[term]) newSchedulesAll[term] = {};
                 if (!newSchedulesAll[term][manualEditModal.cls]) newSchedulesAll[term][manualEditModal.cls] = {0:{}, 1:{}, 2:{}, 3:{}, 4:{}};
                 if (!newSchedulesAll[term][manualEditModal.cls][manualEditModal.day]) newSchedulesAll[term][manualEditModal.cls][manualEditModal.day] = {};
 
-                if (!manualEditModal.sub || !manualEditModal.tId) {
+                if (!manualEditModal.sub) {
                     delete newSchedulesAll[term][manualEditModal.cls][manualEditModal.day][manualEditModal.hour];
                 } else {
-                    newSchedulesAll[term][manualEditModal.cls][manualEditModal.day][manualEditModal.hour] = {
-                        sub: manualEditModal.sub,
-                        tId: manualEditModal.tId
-                    };
+                    newSchedulesAll[term][manualEditModal.cls][manualEditModal.day][manualEditModal.hour] = { sub: manualEditModal.sub, tId: manualEditModal.tId };
                 }
 
-                updateYearlyDataField('schedules', newSchedulesAll);
+                // СИНХРОНИЗАЦИЯ С УЧЕБНИЯ ПЛАН
+                const newCur = JSON.parse(JSON.stringify(currentCurriculum));
+                if (!newCur[term]) newCur[term] = {};
+                if (!newCur[term][manualEditModal.cls]) newCur[term][manualEditModal.cls] = [];
+
+                if (manualEditModal.sub) {
+                    let existingItemIndex = newCur[term][manualEditModal.cls].findIndex(i => i.sub === manualEditModal.sub);
+                    if (existingItemIndex !== -1) {
+                        // Обновяваме учителя, ако е сменен
+                        if (newCur[term][manualEditModal.cls][existingItemIndex].tId !== manualEditModal.tId) {
+                            newCur[term][manualEditModal.cls][existingItemIndex].tId = manualEditModal.tId;
+                        }
+                    } else {
+                        // Ако предмета го няма, добавяме го с 1 час
+                        newCur[term][manualEditModal.cls].push({
+                            id: `c_${Date.now()}`,
+                            tId: manualEditModal.tId,
+                            sub: manualEditModal.sub,
+                            hours: 1
+                        });
+                    }
+                }
+
+                updateMultipleYearlyFields({ schedules: newSchedulesAll, curriculum: newCur });
                 setManualEditModal({ isOpen: false, cls: '', day: 0, hour: 0, sub: '', tId: '' });
-                showToast("Разписанието е обновено ръчно!");
+                showToast("Часът е запазен и заключен за генератора!");
             };
 
-            // --- 3. ЕКСПОРТ ФУНКЦИИ ---
             const exportExcel = () => {
                 if (!selectedClass) return showToast("Изберете клас за експорт!");
-                
                 const classesToExport = selectedClass === 'all' ? currentClasses : [selectedClass];
                 const workbook = XLSX.utils.book_new();
                 let hasData = false;
-
                 classesToExport.forEach(cls => {
                     const sched = currentSchedules[term]?.[cls];
                     if (!sched) return;
                     hasData = true;
-
                     const exportData = [];
-                    for(let h=1; h<=7; h++) {
+                    for(let h=1; h<=6; h++) {
                         let row = { "Час": `${h}` };
                         for(let d=0; d<5; d++) {
                             const cell = sched[d]?.[h];
                             if (cell) {
                                 const teacher = currentTeachers.find(t => t.id === cell.tId)?.name || '';
                                 row[DAYS_BG[d]] = `${cell.sub} (${teacher})`;
-                            } else {
-                                row[DAYS_BG[d]] = "-";
-                            }
+                            } else { row[DAYS_BG[d]] = "-"; }
                         }
                         exportData.push(row);
                     }
-                    const worksheet = XLSX.utils.json_to_sheet(exportData);
-                    XLSX.utils.book_append_sheet(workbook, worksheet, cls.substring(0, 31));
+                    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(exportData), cls.substring(0, 31));
                 });
-
-                if(!hasData) return showToast("Няма генерирано разписание за експорт!");
+                if(!hasData) return setSystemModal({isOpen: true, type: 'error', title: 'Няма данни', message: 'Няма генерирано разписание за избрания клас/ове.'});
                 XLSX.writeFile(workbook, `Razpisanie_${schoolYear.replace('/','-')}_Srok${term}_${selectedClass === 'all' ? 'Vsichki' : selectedClass}.xlsx`);
             };
 
             const exportWord = () => {
                 if (!selectedClass) return;
-                
                 const classesToExport = selectedClass === 'all' ? currentClasses : [selectedClass];
                 let htmlContent = '';
-
                 classesToExport.forEach((cls, index) => {
                     const tableElement = document.getElementById(`schedule-table-${cls}`);
                     if (!tableElement) return;
-
-                    const tableHtml = tableElement.outerHTML;
                     htmlContent += `
                         <h2 style="text-align:center; font-family: sans-serif;">ЦСОП "Леда Милева", гр. Долни Дъбник</h2>
                         <h3 style="text-align:center; font-family: sans-serif;">Седмично разписание - ${cls} клас (Срок ${term}, ${schoolYear} г.)</h3>
-                        ${tableHtml}
+                        ${tableElement.outerHTML}
                         ${index < classesToExport.length - 1 ? '<br clear="all" style="page-break-before:always" />' : ''}
                     `;
                 });
-
-                if(!htmlContent) return showToast("Няма таблици за експорт!");
-
-                const fullHtml = `<html><head><meta charset="UTF-8"></head><body>${htmlContent}</body></html>`;
-                
-                const blob = new Blob(['\ufeff', fullHtml], { type: 'application/msword' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `Razpisanie_${schoolYear.replace('/','-')}_${selectedClass === 'all' ? 'Vsichki' : selectedClass}.doc`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+                if(!htmlContent) return setSystemModal({isOpen: true, type: 'error', title: 'Няма данни', message: 'Няма таблици за експорт.'});
+                const blob = new Blob(['\ufeff', `<html><head><meta charset="UTF-8"></head><body>${htmlContent}</body></html>`], { type: 'application/msword' });
+                const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `Razpisanie_${schoolYear.replace('/','-')}_${selectedClass === 'all' ? 'Vsichki' : selectedClass}.doc`;
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
             };
 
-            // --- ЕКРАН ЗА ВХОД ---
             if (!isLoggedIn) {
                 return (
                     <div className="h-screen flex items-center justify-center bg-slate-900 px-4">
-                        <div className="bg-white p-8 md:p-12 rounded-3xl shadow-2xl max-w-md w-full border-t-8 border-indigo-600 text-center relative overflow-hidden">
-                            <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-indigo-50 opacity-50 pointer-events-none"></div>
-                            
-                            <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-4xl text-white font-black shadow-lg mx-auto mb-6 relative z-10">
-                                🏫
+                        {systemModal.isOpen && (
+                            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
+                                <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center">
+                                    <div className="w-16 h-16 mx-auto bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl mb-4">ℹ️</div>
+                                    <h3 className="text-xl font-black text-slate-800 mb-2">{systemModal.title}</h3>
+                                    <p className="text-slate-500 font-medium mb-6">{systemModal.message}</p>
+                                    <button onClick={() => setSystemModal({isOpen: false})} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold uppercase text-sm w-full">Разбрах</button>
+                                </div>
                             </div>
-                            
+                        )}
+                        <div className="bg-white p-8 md:p-12 rounded-3xl shadow-2xl max-w-md w-full border-t-8 border-indigo-600 text-center relative overflow-hidden">
+                            <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-4xl text-white font-black shadow-lg mx-auto mb-6 relative z-10">🏫</div>
                             <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight mb-2 relative z-10">ЦСОП "Леда Милева"</h2>
                             <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-8 relative z-10">Система за Разписания</p>
-                            
                             <form onSubmit={handleLogin} className="relative z-10">
                                 <div className="mb-6 text-left">
                                     <label className="text-xs font-bold text-slate-500 uppercase mb-2 block ml-1">Парола за достъп</label>
                                     <input 
-                                        type="password" 
-                                        value={passwordInput} 
-                                        onChange={e => setPasswordInput(e.target.value)} 
-                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold text-center tracking-widest outline-none focus:border-indigo-500 focus:bg-white transition-all" 
-                                        placeholder="•••••••"
-                                        autoFocus
+                                        type="password" value={passwordInput} onChange={e => {setPasswordInput(e.target.value); setLoginError('');}} 
+                                        className={`w-full p-4 bg-slate-50 border ${loginError ? 'border-red-400' : 'border-slate-200'} rounded-xl font-bold text-center tracking-widest outline-none focus:border-indigo-500 focus:bg-white transition-all`}
+                                        placeholder="•••••••" autoFocus
                                     />
+                                    {loginError && <p className="text-[10px] font-bold text-red-500 uppercase mt-2 text-center">{loginError}</p>}
                                 </div>
-                                <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700 hover:shadow-lg transition-all">
-                                    Вход в системата
-                                </button>
+                                <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700 hover:shadow-lg transition-all">Вход в системата</button>
                             </form>
-                            
                             <p className="mt-8 text-xs text-slate-400 font-medium">© {new Date().getFullYear()} Всички права запазени.</p>
                         </div>
                     </div>
                 );
             }
 
-            // --- UI РЕНДЕРИРАНЕ НА ПРИЛОЖЕНИЕТО ---
             if (!ready) {
                 return (
                     <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
@@ -620,61 +644,125 @@
             const renderedClasses = selectedClass === 'all' ? currentClasses : (selectedClass ? [selectedClass] : []);
 
             return (
-                <div className="min-h-screen flex flex-col">
+                <div className="min-h-screen flex flex-col relative">
                     {toastMessage && (
-                        <div className="fixed top-5 right-5 bg-indigo-600 text-white px-6 py-3 rounded-lg shadow-2xl z-50 font-bold transition-all">
-                            {toastMessage}
+                        <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl z-50 font-bold transition-all border border-slate-700 flex items-center gap-3">
+                            <span className="text-emerald-400">✓</span> {toastMessage}
                         </div>
                     )}
 
-                    {/* Хедър - ОПТИМИЗИРАН ЗА РЕСПОНСИВ ДИЗАЙН */}
+                    {systemModal.isOpen && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
+                            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center">
+                                <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center text-2xl mb-4 ${systemModal.type === 'error' ? 'bg-red-100 text-red-600' : systemModal.type === 'confirm' ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                                    {systemModal.type === 'error' ? '❌' : systemModal.type === 'confirm' ? '❓' : 'ℹ️'}
+                                </div>
+                                <h3 className="text-xl font-black text-slate-800 mb-2">{systemModal.title}</h3>
+                                <p className="text-slate-500 font-medium mb-6 text-sm">{systemModal.message}</p>
+                                
+                                {systemModal.type === 'confirm' ? (
+                                    <div className="flex gap-3">
+                                        <button onClick={() => { if(systemModal.onConfirm) systemModal.onConfirm(); setSystemModal({isOpen: false}); }} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold uppercase text-sm hover:bg-indigo-700">Да, продължи</button>
+                                        <button onClick={() => setSystemModal({isOpen: false})} className="flex-1 bg-slate-200 text-slate-700 py-3 rounded-xl font-bold uppercase text-sm hover:bg-slate-300">Отказ</button>
+                                    </div>
+                                ) : (
+                                    <button onClick={() => setSystemModal({isOpen: false})} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold uppercase text-sm w-full">Разбрах</button>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {editStringModal.isOpen && (
+                        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
+                            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full border border-slate-200">
+                                <h3 className="text-lg font-black text-slate-800 uppercase mb-4 flex items-center gap-2">
+                                    <span className="text-indigo-500">✏️</span> 
+                                    Редакция на {editStringModal.type === 'class' ? 'Паралелка' : 'Учител'}
+                                </h3>
+                                <div className="mb-6">
+                                    <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Ново име</label>
+                                    <input 
+                                        type="text" value={editStringModal.newVal} onChange={e => setEditStringModal({...editStringModal, newVal: e.target.value})}
+                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-bold outline-none focus:border-indigo-500" 
+                                        autoFocus
+                                    />
+                                    {editStringModal.type === 'class' && <p className="text-[10px] text-orange-500 font-bold mt-2 leading-tight">Всички планове и разписания към тази паралелка ще бъдат прехвърлени към новото име автоматично.</p>}
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={handleRenameSave} className="flex-1 bg-indigo-600 text-white p-3 rounded-xl font-black uppercase text-xs hover:bg-indigo-700">Запази</button>
+                                    <button onClick={() => setEditStringModal({isOpen:false})} className="bg-slate-200 text-slate-700 px-5 rounded-xl font-bold uppercase text-xs hover:bg-slate-300">Отказ</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {assignSubModal.isOpen && (
+                        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
+                            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 flex flex-col max-h-[90vh]">
+                                <h3 className="text-lg font-black text-slate-800 uppercase mb-2 flex items-center gap-2">
+                                    <span className="text-indigo-500">➕</span> Разпределяне на Предмет
+                                </h3>
+                                <p className="text-sm font-bold text-slate-500 mb-4 pb-4 border-b border-slate-100">{assignSubModal.subject}</p>
+                                
+                                <p className="text-xs font-bold text-slate-400 uppercase mb-3">Изберете паралелки (Срок {term}):</p>
+                                <div className="overflow-y-auto custom-scrollbar flex-1 mb-6 border border-slate-100 rounded-xl p-3 bg-slate-50 grid grid-cols-2 gap-2">
+                                    {currentClasses.map(c => (
+                                        <label key={c} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${assignSubModal.selectedClasses.includes(c) ? 'bg-indigo-100 border-indigo-300 text-indigo-800' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'}`}>
+                                            <input 
+                                                type="checkbox" className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                                                checked={assignSubModal.selectedClasses.includes(c)}
+                                                onChange={(e) => {
+                                                    if(e.target.checked) setAssignSubModal(p => ({...p, selectedClasses: [...p.selectedClasses, c]}));
+                                                    else setAssignSubModal(p => ({...p, selectedClasses: p.selectedClasses.filter(x => x !== c)}));
+                                                }} 
+                                            />
+                                            <span className="font-bold text-sm">{c}</span>
+                                        </label>
+                                    ))}
+                                    {currentClasses.length === 0 && <p className="col-span-2 text-center text-slate-400 text-xs py-4">Няма въведени паралелки</p>}
+                                </div>
+                                <div className="flex gap-3 mt-auto">
+                                    <button onClick={handleAssignSubjectSave} className="flex-1 bg-indigo-600 text-white p-3 rounded-xl font-black uppercase text-xs hover:bg-indigo-700">Разпредели ({assignSubModal.selectedClasses.length})</button>
+                                    <button onClick={() => setAssignSubModal({isOpen:false})} className="bg-slate-200 text-slate-700 px-5 rounded-xl font-bold uppercase text-xs hover:bg-slate-300">Отказ</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <header className="bg-slate-900 text-white shadow-xl no-print sticky top-0 z-40">
                         <div className="max-w-7xl mx-auto px-4 py-3 md:py-4">
                             <div className="flex flex-col xl:flex-row justify-between items-center gap-4">
-                                
-                                {/* Лява част: Лого и Учебна година */}
                                 <div className="flex justify-between items-center w-full xl:w-auto">
                                     <div className="flex items-center gap-3 md:gap-4">
                                         <div className="w-10 h-10 md:w-12 md:h-12 bg-indigo-500 rounded-xl flex items-center justify-center text-xl md:text-2xl font-black shadow-lg shadow-indigo-500/30 flex-shrink-0">Ц</div>
                                         <div>
                                             <h1 className="text-base md:text-xl font-black uppercase tracking-tight leading-tight">ЦСОП "Леда Милева"</h1>
                                             <div className="flex items-center gap-1.5 md:gap-2 mt-0.5 md:mt-1 flex-wrap">
-                                                <select 
-                                                    value={schoolYear} 
-                                                    onChange={handleSchoolYearChange} 
-                                                    className="bg-slate-800 text-indigo-300 font-bold text-[9px] md:text-xs uppercase tracking-widest rounded-md px-1.5 py-0.5 outline-none border border-slate-700 cursor-pointer"
-                                                >
+                                                <select value={schoolYear} onChange={handleSchoolYearChange} className="bg-slate-800 text-indigo-300 font-bold text-[9px] md:text-xs uppercase tracking-widest rounded-md px-1.5 py-0.5 outline-none border border-slate-700 cursor-pointer">
                                                     {AVAILABLE_YEARS.map(y => <option key={y} value={y}>Учебна {y}</option>)}
                                                 </select>
                                                 <span className="text-[9px] md:text-xs text-indigo-300 font-bold uppercase tracking-widest whitespace-nowrap">• {term} СРОК</span>
+                                                <button onClick={handleCreateNewYear} className="ml-2 bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors" title="Създай следваща година">🌟 Нов сезон</button>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* Дясна част: Меню & Изход */}
                                 <div className="flex flex-col lg:flex-row items-center gap-3 lg:gap-4 w-full xl:w-auto overflow-hidden">
-                                    
-                                    {/* Навигационни бутони */}
                                     <div className="flex bg-slate-800 p-1 md:p-1.5 rounded-xl gap-1 overflow-x-auto w-full lg:w-auto hide-scrollbar">
-                                        <button onClick={() => setActiveTab('schedule')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'schedule' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Разписание</button>
-                                        <button onClick={() => setActiveTab('curriculum')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'curriculum' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Учебен План</button>
-                                        <button onClick={() => setActiveTab('database')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'database' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>База Данни</button>
-                                        <button onClick={() => setActiveTab('conditions')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'conditions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Условия</button>
+                                        <button onClick={() => setActiveTab('schedule')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'schedule' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>Разписание</button>
+                                        <button onClick={() => setActiveTab('curriculum')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'curriculum' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>Учебен План</button>
+                                        <button onClick={() => setActiveTab('database')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'database' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>База Данни</button>
+                                        <button onClick={() => setActiveTab('conditions')} className={`flex-1 lg:flex-none px-4 py-2.5 md:py-2 rounded-lg text-[9px] md:text-xs font-black uppercase transition-all whitespace-nowrap ${activeTab === 'conditions' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>Условия</button>
                                     </div>
-                                    
-                                    {/* Статус и Изход */}
                                     <div className="flex items-center justify-between lg:justify-end gap-3 border-t lg:border-t-0 lg:border-l border-slate-700 pt-3 lg:pt-0 lg:pl-4 w-full lg:w-auto flex-shrink-0">
                                         <div className="flex items-center gap-1.5">
                                             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
                                             <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest">Вписан</span>
                                         </div>
-                                        <button onClick={handleLogout} className="bg-slate-800 border border-slate-700 hover:bg-red-600 hover:border-red-600 text-white text-[10px] font-black uppercase px-5 py-2 rounded-lg transition-colors whitespace-nowrap shadow-sm">
-                                            Изход
-                                        </button>
+                                        <button onClick={handleLogout} className="bg-slate-800 border border-slate-700 hover:bg-red-600 hover:border-red-600 text-white text-[10px] font-black uppercase px-5 py-2 rounded-lg transition-colors whitespace-nowrap shadow-sm">Изход</button>
                                     </div>
                                 </div>
-
                             </div>
                         </div>
                     </header>
@@ -690,22 +778,21 @@
                                             <div>
                                                 <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Срок</label>
                                                 <select value={term} onChange={e => setTerm(e.target.value)} className="bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                    <option value="1">I СРОК</option>
-                                                    <option value="2">II СРОК</option>
+                                                    <option value="1">I СРОК</option><option value="2">II СРОК</option>
                                                 </select>
                                             </div>
                                             <div className="flex-1 min-w-[150px]">
                                                 <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преглед на Клас</label>
                                                 <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                    <option value="">-- Избери --</option>
-                                                    <option value="all">Всички класове</option>
+                                                    <option value="">-- Избери --</option><option value="all">Всички класове</option>
                                                     {currentClasses.map(c => <option key={c} value={c}>{c}</option>)}
                                                 </select>
                                             </div>
                                         </div>
                                         
                                         <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
-                                            <button onClick={generateSchedule} className="flex-1 md:flex-none bg-indigo-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700">Генерирай Всички</button>
+                                            <button onClick={generateSchedule} className="flex-1 md:flex-none bg-indigo-600 text-white px-6 py-3 rounded-xl font-black uppercase text-sm shadow-md hover:bg-indigo-700">Генерирай</button>
+                                            <button onClick={handleClearSchedule} className="flex-1 md:flex-none bg-red-500 text-white px-4 py-3 rounded-xl font-black uppercase text-sm shadow-md hover:bg-red-600" title="Изчисти Разписанието">✖ Изчисти</button>
                                             {selectedClass && (
                                                 <>
                                                     <button onClick={exportExcel} className="bg-green-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-green-700" title="Експорт към Excel">XLS</button>
@@ -715,7 +802,7 @@
                                             )}
                                         </div>
                                     </div>
-                                    <p className="text-xs text-slate-400 font-medium mt-4 text-center">💡 Съвет: Щракнете два пъти върху конкретен час, за да го промените ръчно.</p>
+                                    <p className="text-xs text-slate-400 font-medium mt-4 text-center">💡 Съвет: Генераторът попълва само свободните клетки. Щракнете 2 пъти върху час за ръчна редакция.</p>
                                 </div>
 
                                 {renderedClasses.length > 0 ? (
@@ -731,13 +818,11 @@
                                                         <thead>
                                                             <tr>
                                                                 <th className="p-3 border-b-2 border-slate-200 text-xs font-black text-slate-400 uppercase w-16" style={{borderBottom: "2px solid #e2e8f0"}}>Час</th>
-                                                                {DAYS_BG.map(d => (
-                                                                    <th key={d} className="p-3 border-b-2 border-slate-200 text-sm font-black text-slate-700 uppercase w-1/5" style={{borderBottom: "2px solid #e2e8f0"}}>{d}</th>
-                                                                ))}
+                                                                {DAYS_BG.map(d => <th key={d} className="p-3 border-b-2 border-slate-200 text-sm font-black text-slate-700 uppercase w-1/5" style={{borderBottom: "2px solid #e2e8f0"}}>{d}</th>)}
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {[1,2,3,4,5,6,7].map(hour => {
+                                                            {[1,2,3,4,5,6].map(hour => {
                                                                 return (
                                                                     <tr key={hour} className="border-b border-slate-100 transition-colors">
                                                                         <td className="p-4 text-center font-black text-slate-300 text-2xl" style={{borderBottom: "1px solid #f1f5f9"}}>{hour}</td>
@@ -745,21 +830,13 @@
                                                                             const cell = currentSchedules[term]?.[cls]?.[dayIdx]?.[hour];
                                                                             const teacher = cell ? currentTeachers.find(t => t.id === cell.tId) : null;
                                                                             return (
-                                                                                <td 
-                                                                                    key={dayIdx} 
-                                                                                    className="p-2 align-top editable-cell" 
-                                                                                    onDoubleClick={() => handleCellDoubleClick(cls, dayIdx, hour)}
-                                                                                    title="Двоен клик за ръчна редакция"
-                                                                                    style={{borderBottom: "1px solid #f1f5f9"}}
-                                                                                >
+                                                                                <td key={dayIdx} className="p-2 align-top editable-cell" onDoubleClick={() => handleCellDoubleClick(cls, dayIdx, hour)} title="Двоен клик за ръчна редакция" style={{borderBottom: "1px solid #f1f5f9"}}>
                                                                                     {cell ? (
                                                                                         <div className={`p-3 rounded-xl border ${hour > 5 ? 'bg-orange-50 border-orange-200' : 'bg-white border-indigo-100 shadow-sm'} h-full flex flex-col justify-center pointer-events-none`} style={{border: "1px solid #e0e7ff", borderRadius: "8px", padding: "8px"}}>
                                                                                             <p className="text-slate-800 font-bold text-xs uppercase leading-tight" style={{margin: 0, fontWeight: "bold"}}>{cell.sub}</p>
-                                                                                            <p className="text-indigo-500 font-medium text-[10px] mt-1" style={{margin: "4px 0 0 0", fontSize: "10px", color: "#6366f1"}}>{teacher?.name}</p>
+                                                                                            <p className="text-indigo-500 font-medium text-[10px] mt-1" style={{margin: "4px 0 0 0", fontSize: "10px", color: "#6366f1"}}>{teacher?.name || <span className="text-red-400">Без учител</span>}</p>
                                                                                         </div>
-                                                                                    ) : (
-                                                                                        <div className="h-full min-h-[60px] rounded-xl border border-dashed border-slate-200 bg-slate-50/50 pointer-events-none"></div>
-                                                                                    )}
+                                                                                    ) : <div className="h-full min-h-[60px] rounded-xl border border-dashed border-slate-200 bg-slate-50/50 pointer-events-none"></div>}
                                                                                 </td>
                                                                             )
                                                                         })}
@@ -773,9 +850,7 @@
                                         ))}
                                     </div>
                                 ) : (
-                                    <div className="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400 font-medium">
-                                        Изберете паралелка за преглед на разписанието
-                                    </div>
+                                    <div className="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400 font-medium">Изберете паралелка за преглед на разписанието</div>
                                 )}
                             </div>
                         )}
@@ -793,21 +868,22 @@
                                         <div className="flex items-center gap-3">
                                             {term === '2' && !editingItemId && (
                                                 <button 
-                                                    onClick={() => {
-                                                        if(confirm(`Сигурни ли сте? Това ще презапише текущия план за 2-ри срок (${schoolYear}) с този от 1-ви!`)) {
+                                                    onClick={() => setSystemModal({
+                                                        isOpen: true, type: 'confirm', title: 'Копиране от 1-ви срок',
+                                                        message: `Сигурни ли сте? Това ще презапише текущия план за 2-ри срок (${schoolYear}) с този от 1-ви!`,
+                                                        onConfirm: () => {
                                                             const newCur = JSON.parse(JSON.stringify(currentCurriculum));
                                                             newCur['2'] = JSON.parse(JSON.stringify(newCur['1'] || {}));
                                                             updateYearlyDataField('curriculum', newCur);
                                                             showToast("Планът е копиран успешно!");
                                                         }
-                                                    }}
+                                                    })}
                                                     className="bg-amber-100 text-amber-700 px-4 py-2 rounded-lg text-xs font-bold uppercase hover:bg-amber-200 transition-colors">
                                                     Копирай от I Срок
                                                 </button>
                                             )}
                                             <select value={term} onChange={e => setTerm(e.target.value)} disabled={editingItemId !== null} className={`bg-slate-100 text-slate-700 font-black text-sm px-4 py-2 rounded-lg outline-none border-2 border-transparent ${editingItemId ? 'opacity-50 cursor-not-allowed' : 'focus:border-indigo-500'}`}>
-                                                <option value="1">I СРОК</option>
-                                                <option value="2">II СРОК</option>
+                                                <option value="1">I СРОК</option><option value="2">II СРОК</option>
                                             </select>
                                         </div>
                                     </div>
@@ -816,22 +892,19 @@
                                         <div className="md:col-span-1">
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Паралелка</label>
                                             <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} disabled={editingItemId !== null} className={`w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none ${editingItemId ? 'opacity-50 cursor-not-allowed' : 'focus:border-indigo-500'}`}>
-                                                <option value="">-- Избери --</option>
-                                                {currentClasses.map(c => <option key={c} value={c}>{c}</option>)}
+                                                <option value="">-- Избери --</option>{currentClasses.map(c => <option key={c} value={c}>{c}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Предмет</label>
                                             <select value={curForm.sub} onChange={e => setCurForm({...curForm, sub: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                <option value="">-- Избери --</option>
-                                                {currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                                <option value="">-- Избери --</option>{currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
-                                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател</label>
+                                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател <span className="text-[9px] font-normal text-slate-400 lowercase">(опц.)</span></label>
                                             <select value={curForm.tId} onChange={e => setCurForm({...curForm, tId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
-                                                <option value="">-- Избери --</option>
-                                                {currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                                <option value="">-- Без учител --</option>{currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                             </select>
                                         </div>
                                         <div className="md:col-span-1">
@@ -847,22 +920,19 @@
                                     <div className="flex gap-3">
                                         <button 
                                             onClick={() => {
-                                                if(!selectedClass || !curForm.tId || !curForm.sub) return showToast("Моля, попълнете всички полета!");
+                                                if(!selectedClass || !curForm.sub) return setSystemModal({isOpen: true, type: 'error', title: 'Липсват данни', message: 'Моля, изберете паралелка и предмет!'});
                                                 const newCur = JSON.parse(JSON.stringify(currentCurriculum));
                                                 if(!newCur[term][selectedClass]) newCur[term][selectedClass] = [];
                                                 
                                                 if (editingItemId) {
                                                     const idx = newCur[term][selectedClass].findIndex(i => i.id === editingItemId);
-                                                    if(idx !== -1) {
-                                                        newCur[term][selectedClass][idx] = { ...curForm };
-                                                    }
+                                                    if(idx !== -1) newCur[term][selectedClass][idx] = { ...curForm };
                                                     showToast("Промените са запазени!");
                                                     setEditingItemId(null);
                                                 } else {
-                                                    newCur[term][selectedClass].push({...curForm, id: Date.now().toString()});
+                                                    newCur[term][selectedClass].push({...curForm, id: `c_${Date.now()}`});
                                                     showToast("Добавено към плана!");
                                                 }
-
                                                 updateYearlyDataField('curriculum', newCur);
                                                 setCurForm({ id: '', tId: '', sub: '', hours: 1 }); 
                                             }}
@@ -871,14 +941,7 @@
                                         </button>
                                         
                                         {editingItemId && (
-                                            <button 
-                                                onClick={() => {
-                                                    setEditingItemId(null);
-                                                    setCurForm({ id: '', tId: '', sub: '', hours: 1 });
-                                                }}
-                                                className="bg-slate-200 text-slate-700 px-6 rounded-xl font-bold uppercase text-sm hover:bg-slate-300 transition-colors">
-                                                Отказ
-                                            </button>
+                                            <button onClick={() => { setEditingItemId(null); setCurForm({ id: '', tId: '', sub: '', hours: 1 }); }} className="bg-slate-200 text-slate-700 px-6 rounded-xl font-bold uppercase text-sm hover:bg-slate-300 transition-colors">Отказ</button>
                                         )}
                                     </div>
                                 </div>
@@ -894,42 +957,41 @@
                                                 {currentCurriculum[term][selectedClass].map((item, idx) => {
                                                     const teacher = currentTeachers.find(t => t.id === item.tId);
                                                     const isBeingEdited = editingItemId === item.id;
+                                                    
+                                                    // Пресмятане на вече разпределените часове в разписанието
+                                                    let placedCount = 0;
+                                                    const clsSched = currentSchedules[term]?.[selectedClass] || {};
+                                                    for(let d=0; d<5; d++) {
+                                                        for(let h=1; h<=6; h++) {
+                                                            if (clsSched[d]?.[h]?.sub === item.sub && clsSched[d]?.[h]?.tId === item.tId) {
+                                                                placedCount++;
+                                                            }
+                                                        }
+                                                    }
+                                                    const remaining = Math.max(0, item.hours - placedCount);
+
                                                     return (
-                                                        <div key={item.id} className={`flex justify-between items-center p-3 rounded-xl border ${isBeingEdited ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'} transition-all`}>
+                                                        <div key={item.id} className={`flex justify-between items-center p-3 rounded-xl border ${isBeingEdited ? 'bg-emerald-50 border-emerald-200 shadow-md' : 'bg-slate-50 border-slate-100'} transition-all`}>
                                                             <div className="flex items-center gap-3">
-                                                                <div className={`w-10 h-10 ${isBeingEdited ? 'bg-emerald-200 text-emerald-800' : 'bg-indigo-100 text-indigo-700'} rounded-lg flex items-center justify-center font-black`}>{item.hours}</div>
+                                                                <div className={`w-14 h-10 ${isBeingEdited ? 'bg-emerald-200 text-emerald-800' : remaining === 0 ? 'bg-slate-200 text-slate-500' : 'bg-indigo-100 text-indigo-700'} rounded-lg flex items-center justify-center font-black flex-shrink-0 text-xs`} title="Оставащи / Общо часове">
+                                                                    {remaining}/{item.hours}
+                                                                </div>
                                                                 <div>
                                                                     <p className="font-bold text-slate-800 text-sm leading-tight">{item.sub}</p>
-                                                                    <p className="text-xs text-slate-500">{teacher ? teacher.name : 'Неизвестен'}</p>
+                                                                    <p className="text-xs text-slate-500">{teacher ? teacher.name : <span className="text-orange-500 italic">Не е посочен учител</span>}</p>
                                                                 </div>
                                                             </div>
-                                                            <div className="flex gap-1">
-                                                                <button 
-                                                                    onClick={() => {
-                                                                        setCurForm({ ...item });
-                                                                        setEditingItemId(item.id);
-                                                                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                                                                    }}
-                                                                    className="text-slate-400 hover:text-indigo-600 bg-white border border-slate-200 hover:border-indigo-300 w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-                                                                    title="Редактирай">
-                                                                    ✏️
-                                                                </button>
-                                                                <button 
-                                                                    onClick={() => {
-                                                                        if(confirm("Сигурни ли сте, че искате да изтриете този запис?")) {
-                                                                            const newCur = JSON.parse(JSON.stringify(currentCurriculum));
-                                                                            newCur[term][selectedClass].splice(idx, 1);
-                                                                            updateYearlyDataField('curriculum', newCur);
-                                                                            if(isBeingEdited) {
-                                                                                setEditingItemId(null);
-                                                                                setCurForm({ id: '', tId: '', sub: '', hours: 1 });
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    className="text-red-400 hover:text-red-600 bg-white border border-slate-200 hover:border-red-300 w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-                                                                    title="Изтрий">
-                                                                    ✖
-                                                                </button>
+                                                            <div className="flex gap-1 flex-shrink-0">
+                                                                <button onClick={() => { setCurForm({ ...item }); setEditingItemId(item.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="text-slate-400 hover:text-indigo-600 bg-white border border-slate-200 hover:border-indigo-300 w-8 h-8 flex items-center justify-center rounded-lg transition-colors" title="Редактирай">✏️</button>
+                                                                <button onClick={() => setSystemModal({
+                                                                    isOpen: true, type: 'confirm', title: 'Изтриване', message: 'Сигурни ли сте, че искате да изтриете този запис?',
+                                                                    onConfirm: () => {
+                                                                        const newCur = JSON.parse(JSON.stringify(currentCurriculum));
+                                                                        newCur[term][selectedClass].splice(idx, 1);
+                                                                        updateYearlyDataField('curriculum', newCur);
+                                                                        if(isBeingEdited) { setEditingItemId(null); setCurForm({ id: '', tId: '', sub: '', hours: 1 }); }
+                                                                    }
+                                                                })} className="text-red-400 hover:text-red-600 bg-white border border-slate-200 hover:border-red-300 w-8 h-8 flex items-center justify-center rounded-lg transition-colors" title="Изтрий">✖</button>
                                                             </div>
                                                         </div>
                                                     )
@@ -946,13 +1008,13 @@
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 
                                 {/* Класове */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col max-h-[80vh]">
+                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2 flex-shrink-0">
                                         <span className="text-indigo-500">🏫</span> Паралелки
                                     </h3>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-3">Хванете и плъзнете за пренареждане (Първият е с най-висок приоритет)</p>
-                                    <div className="flex gap-2 mb-4">
-                                        <input value={newClass} onChange={e=>setNewClass(e.target.value)} placeholder="Напр. V" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-3 flex-shrink-0">Хванете и плъзнете за пренареждане</p>
+                                    <div className="flex gap-2 mb-4 flex-shrink-0">
+                                        <input value={newClass} onChange={e=>setNewClass(e.target.value)} placeholder="Напр. V" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500" />
                                         <button onClick={() => {
                                             if(newClass && !currentClasses.includes(newClass)) {
                                                 updateYearlyDataField('classes', [...currentClasses, newClass]);
@@ -960,80 +1022,76 @@
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                                    <div className="space-y-2 overflow-y-auto custom-scrollbar pr-1 pb-4">
                                         {currentClasses.map((c, index) => (
-                                            <div 
-                                                key={c} 
-                                                draggable
-                                                onDragStart={(e) => dragClassStart(e, index)}
-                                                onDragEnter={(e) => dragClassEnter(e, index)}
-                                                onDragEnd={dropClass}
-                                                onDragOver={dragClassOver}
-                                                className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-200 cursor-move hover:bg-indigo-50 hover:border-indigo-200 transition-colors shadow-sm"
-                                                title="Плъзнете за пренареждане"
-                                            >
-                                                <div className="flex items-center gap-3">
-                                                    <span className="text-slate-400 cursor-grab active:cursor-grabbing text-lg">⣿</span>
-                                                    <span className="font-bold text-slate-700">{c}</span>
+                                            <div key={c} draggable onDragStart={(e) => dragClassStart(e, index)} onDragEnter={(e) => dragClassEnter(e, index)} onDragEnd={dropClass} onDragOver={dragClassOver} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-200 cursor-move hover:bg-indigo-50 hover:border-indigo-200 transition-colors shadow-sm group">
+                                                <div className="flex items-center gap-3 overflow-hidden">
+                                                    <span className="text-slate-400 cursor-grab active:cursor-grabbing text-lg leading-none">⣿</span>
+                                                    <span className="font-bold text-slate-700 truncate">{c}</span>
                                                 </div>
-                                                <button onClick={() => updateYearlyDataField('classes', currentClasses.filter(x => x !== c))} className="text-red-400 hover:text-red-600 text-[10px] font-black uppercase bg-white px-2 py-1 rounded shadow-sm">Изтрий</button>
+                                                <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => setEditStringModal({isOpen: true, type: 'class', id: '', oldVal: c, newVal: c})} className="text-slate-500 hover:text-indigo-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase">✏️</button>
+                                                    <button onClick={() => updateYearlyDataField('classes', currentClasses.filter(x => x !== c))} className="text-red-400 hover:text-red-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase">✖</button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
 
                                 {/* Учители */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col max-h-[80vh]">
+                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2 flex-shrink-0">
                                         <span className="text-indigo-500">👩‍🏫</span> Преподаватели
                                     </h3>
-                                    <div className="flex gap-2 mb-4">
-                                        <input value={newTeacher} onChange={e=>setNewTeacher(e.target.value)} placeholder="Име Фамилия" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
+                                    <div className="flex gap-2 mb-4 flex-shrink-0">
+                                        <input value={newTeacher} onChange={e=>setNewTeacher(e.target.value)} placeholder="Име Фамилия" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500" />
                                         <button onClick={() => {
                                             if(newTeacher) {
-                                                // Проверка да не се дублира името
                                                 if(!currentTeachers.some(t => t.name.toLowerCase() === newTeacher.toLowerCase())) {
-                                                    updateYearlyDataField('teachers', [...currentTeachers, { id: Date.now().toString(), name: newTeacher }]);
+                                                    updateYearlyDataField('teachers', [...currentTeachers, { id: `t_${Date.now()}`, name: newTeacher }]);
                                                     setNewTeacher('');
-                                                } else {
-                                                    showToast("Този учител вече съществува!");
-                                                }
+                                                } else { showToast("Този учител вече съществува!"); }
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                                    <div className="space-y-2 overflow-y-auto custom-scrollbar pr-1 pb-4">
                                         {currentTeachers.map(t => (
-                                            <div key={t.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                                <span className="font-bold text-slate-700 text-sm">{t.name}</span>
-                                                <button onClick={() => updateYearlyDataField('teachers', currentTeachers.filter(x => x.id !== t.id))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
+                                            <div key={t.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 group hover:border-indigo-100 transition-colors">
+                                                <span className="font-bold text-slate-700 text-sm truncate pr-2">{t.name}</span>
+                                                <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => setEditStringModal({isOpen: true, type: 'teacher', id: t.id, oldVal: t.name, newVal: t.name})} className="text-slate-500 hover:text-indigo-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase">✏️</button>
+                                                    <button onClick={() => updateYearlyDataField('teachers', currentTeachers.filter(x => x.id !== t.id))} className="text-red-400 hover:text-red-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase">✖</button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
 
                                 {/* Предмети */}
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col max-h-[80vh]">
+                                    <h3 className="font-black text-slate-800 uppercase mb-4 flex items-center gap-2 flex-shrink-0">
                                         <span className="text-indigo-500">📖</span> Предмети
                                     </h3>
-                                    <div className="flex gap-2 mb-4">
-                                        <input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="Напр. БЕЛ" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none" />
+                                    <div className="flex gap-2 mb-4 flex-shrink-0">
+                                        <input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="Напр. БЕЛ" className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500" />
                                         <button onClick={() => {
                                             if(newSubject) {
                                                 if(!currentSubjects.some(s => s.toLowerCase() === newSubject.toLowerCase())) {
                                                     updateYearlyDataField('subjects', [...currentSubjects, newSubject]);
                                                     setNewSubject('');
-                                                } else {
-                                                    showToast("Този предмет вече съществува!");
-                                                }
+                                                } else { showToast("Този предмет вече съществува!"); }
                                             }
                                         }} className="bg-indigo-600 text-white px-4 rounded-xl font-black hover:bg-indigo-700">+</button>
                                     </div>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                                    <div className="space-y-2 overflow-y-auto custom-scrollbar pr-1 pb-4">
                                         {currentSubjects.map(s => (
-                                            <div key={s} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                                <span className="font-bold text-slate-700 text-sm">{s}</span>
-                                                <button onClick={() => updateYearlyDataField('subjects', currentSubjects.filter(x => x !== s))} className="text-red-400 hover:text-red-600 text-xs font-bold uppercase">Изтрий</button>
+                                            <div key={s} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 group hover:border-indigo-100 transition-colors">
+                                                <span className="font-bold text-slate-700 text-sm truncate pr-2" title={s}>{s}</span>
+                                                <div className="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    {/* Бутон за разпределяне към класове */}
+                                                    <button onClick={() => setAssignSubModal({isOpen: true, subject: s, selectedClasses: []})} className="text-emerald-500 hover:text-emerald-700 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase" title="Добави към паралелки">➕</button>
+                                                    <button onClick={() => updateYearlyDataField('subjects', currentSubjects.filter(x => x !== s))} className="text-red-400 hover:text-red-600 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm text-[10px] font-black uppercase">✖</button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -1071,20 +1129,18 @@
                                             <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Забранен Час</label>
                                             <select value={condForm.hour} onChange={e => setCondForm({...condForm, hour: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
                                                 <option value="all">Всички (Целият ден)</option>
-                                                {[1,2,3,4,5,6,7].map(h => <option key={h} value={h}>{h}-ви час</option>)}
+                                                {[1,2,3,4,5,6].map(h => <option key={h} value={h}>{h}-ви час</option>)}
                                             </select>
                                         </div>
                                     </div>
 
                                     <button 
                                         onClick={() => {
-                                            if(!condForm.tId) return showToast("Изберете преподавател!");
-                                            const newCond = { id: Date.now().toString(), tId: condForm.tId, day: condForm.day, hour: condForm.hour };
-                                            
+                                            if(!condForm.tId) return setSystemModal({isOpen: true, type: 'error', title: 'Грешка', message: 'Изберете преподавател!'});
+                                            const newCond = { id: `cond_${Date.now()}`, tId: condForm.tId, day: condForm.day, hour: condForm.hour };
                                             if(currentConditions.some(c => c.tId === newCond.tId && c.day === newCond.day && c.hour === newCond.hour)) {
                                                 return showToast("Това условие вече е добавено!");
                                             }
-
                                             updateYearlyDataField('conditions', [...currentConditions, newCond]);
                                             showToast("Условието е запазено!");
                                         }}
@@ -1093,7 +1149,6 @@
                                     </button>
                                 </div>
 
-                                {/* Списък с активни условия */}
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                                     <h3 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Активни Условия</h3>
                                     {(!currentConditions || currentConditions.length === 0) ? (
@@ -1113,11 +1168,7 @@
                                                                 </p>
                                                             </div>
                                                         </div>
-                                                        <button 
-                                                            onClick={() => updateYearlyDataField('conditions', currentConditions.filter(c => c.id !== cond.id))}
-                                                            className="text-slate-400 hover:text-red-500 font-bold uppercase text-xs transition-colors">
-                                                            Премахни
-                                                        </button>
+                                                        <button onClick={() => updateYearlyDataField('conditions', currentConditions.filter(c => c.id !== cond.id))} className="text-slate-400 hover:text-red-500 font-bold uppercase text-xs transition-colors">Премахни</button>
                                                     </div>
                                                 )
                                             })}
@@ -1128,55 +1179,31 @@
                         )}
                     </main>
 
-                    {/* МОДАЛЕН ПРОЗОРЕЦ ЗА РЪЧНА РЕДАКЦИЯ */}
+                    {/* МОДАЛ ЗА РЪЧНА РЕДАКЦИЯ НА КЛЕТКА */}
                     {manualEditModal.isOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4">
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
                             <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-slate-200">
                                 <div className="mb-6">
                                     <h3 className="text-lg font-black text-slate-800 uppercase">Ръчна редакция</h3>
-                                    <p className="text-xs font-bold text-indigo-500 uppercase mt-1">
-                                        Клас {manualEditModal.cls} • {DAYS_BG[manualEditModal.day]}, {manualEditModal.hour}-ви час
-                                    </p>
+                                    <p className="text-xs font-bold text-indigo-500 uppercase mt-1">Клас {manualEditModal.cls} • {DAYS_BG[manualEditModal.day]}, {manualEditModal.hour}-ви час</p>
                                 </div>
-
                                 <div className="space-y-4 mb-8">
                                     <div>
                                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Предмет</label>
-                                        <select 
-                                            value={manualEditModal.sub} 
-                                            onChange={e => setManualEditModal({...manualEditModal, sub: e.target.value})} 
-                                            className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500"
-                                        >
-                                            <option value="">-- Изчисти (Свободен час) --</option>
-                                            {currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                        <select value={manualEditModal.sub} onChange={e => setManualEditModal({...manualEditModal, sub: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                            <option value="">-- Изчисти (Свободен час) --</option>{currentSubjects.map(s => <option key={s} value={s}>{s}</option>)}
                                         </select>
                                     </div>
                                     <div>
                                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Преподавател</label>
-                                        <select 
-                                            value={manualEditModal.tId} 
-                                            onChange={e => setManualEditModal({...manualEditModal, tId: e.target.value})} 
-                                            className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500"
-                                        >
-                                            <option value="">-- Изчисти (Свободен час) --</option>
-                                            {currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                        <select value={manualEditModal.tId} onChange={e => setManualEditModal({...manualEditModal, tId: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 font-bold outline-none focus:border-indigo-500">
+                                            <option value="">-- Без учител --</option>{currentTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                         </select>
                                     </div>
                                 </div>
-
                                 <div className="flex gap-3">
-                                    <button 
-                                        onClick={saveManualEdit}
-                                        className="flex-1 bg-indigo-600 text-white p-3 rounded-xl font-black uppercase text-xs hover:bg-indigo-700 transition-colors"
-                                    >
-                                        Запази
-                                    </button>
-                                    <button 
-                                        onClick={() => setManualEditModal({ isOpen: false, cls: '', day: 0, hour: 0, sub: '', tId: '' })}
-                                        className="bg-slate-200 text-slate-700 px-5 rounded-xl font-bold uppercase text-xs hover:bg-slate-300 transition-colors"
-                                    >
-                                        Отказ
-                                    </button>
+                                    <button onClick={saveManualEdit} className="flex-1 bg-indigo-600 text-white p-3 rounded-xl font-black uppercase text-xs hover:bg-indigo-700">Запази</button>
+                                    <button onClick={() => setManualEditModal({ isOpen: false, cls: '', day: 0, hour: 0, sub: '', tId: '' })} className="bg-slate-200 text-slate-700 px-5 rounded-xl font-bold uppercase text-xs hover:bg-slate-300">Отказ</button>
                                 </div>
                             </div>
                         </div>
@@ -1184,9 +1211,7 @@
 
                     {/* ФУТЕР */}
                     <footer className="bg-slate-900 text-slate-400 py-6 text-center text-xs font-medium no-print mt-auto">
-                        <div className="max-w-7xl mx-auto px-6">
-                            &copy; {new Date().getFullYear()} Всички права запазени - ЦСОП "Леда Милева", гр. Долни Дъбник
-                        </div>
+                        <div className="max-w-7xl mx-auto px-6">&copy; {new Date().getFullYear()} Всички права запазени - ЦСОП "Леда Милева", гр. Долни Дъбник</div>
                     </footer>
                 </div>
             );
